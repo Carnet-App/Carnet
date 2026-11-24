@@ -87,20 +87,33 @@ export default function Home({ me, go }) {
   );
 }
 
-export function CitySearch({ value, onPick, placeholder = 'Paris, Berlin, Barcelona…' }) {
+export function CitySearch({ value, onPick, onText, placeholder = 'Paris, Berlin, Barcelona…' }) {
   const [q, setQ] = useState(value || '');
-  const [res, setRes] = useState([]);
+  const [res, setRes] = useState(null);
+  const [msg, setMsg] = useState('');
   async function search() {
-    try { setRes((await api('/api/geo', { q, limit: 5 })).results.filter((r) => /city|town|village|administrative|state/.test(r.osm_value || ''))); } catch { setRes([]); }
+    if (!q.trim()) return;
+    setMsg('Searching…');
+    try {
+      const all = (await api('/api/geo', { q: q.trim(), limit: 6 })).results || [];
+      const cities = all.filter((r) => /city|town|village|administrative|state|municipality|borough|suburb/.test(r.osm_value || ''));
+      setRes(cities.length ? cities : all);
+      setMsg(all.length ? '' : 'No match — you can still create the trip with the name as typed.');
+    } catch (e) {
+      setRes([]);
+      setMsg(`Search isn’t working (${e.message}) — the name as typed works fine.`);
+    }
   }
   return (
     <div className="col">
       <div className="row">
-        <input className="in" value={q} onChange={(e) => setQ(e.target.value)} placeholder={placeholder} onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), search())} />
+        <input className="in" value={q} onChange={(e) => { setQ(e.target.value); onText?.(e.target.value); onPick?.(null); }} placeholder={placeholder}
+          onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), search())} />
         <button type="button" className="icon" aria-label="Search" onClick={search}><Icon n="search" size={18} /></button>
       </div>
-      {res.map((r, i) => (
-        <button type="button" key={i} className="card" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => { setQ(r.name); setRes([]); onPick({ city: r.name, lat: r.lat, lng: r.lng }); }}>
+      {msg && <div className="s">{msg}</div>}
+      {res?.map((r, i) => (
+        <button type="button" key={i} className="card" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => { setQ(r.name); setRes(null); onPick({ city: r.name, lat: r.lat, lng: r.lng }); }}>
           <div className="n">{r.name}</div><div className="s">{r.address || r.city}</div>
         </button>
       ))}
@@ -114,19 +127,20 @@ function NewTrip({ me, onClose, onDone }) {
   const [name, setName] = useState('');
   const [start, setStart] = useState(todayISO());
   const [end, setEnd] = useState(todayISO());
-  const ok = (city || cityText) && start && end >= start;
+  const ok = (city || cityText.trim()) && start && end >= start;
   function create() {
     const id = uid();
-    const c = city?.city || cityText.trim();
-    upsert('trips', { id, owner: undefined, name: name.trim() || c, city: c, center_lat: city?.lat ?? null, center_lng: city?.lng ?? null, start_date: start, end_date: end });
+    const c = city?.city || cityText.trim().replace(/^./, (x) => x.toUpperCase());
+    upsert('trips', { id, name: name.trim() || c, city: c, center_lat: city?.lat ?? null, center_lng: city?.lng ?? null, start_date: start, end_date: end });
+    if (!city) api('/api/geo', { q: c, limit: 1 }).then((r) => r.results?.[0] && upsert('trips', { id, center_lat: r.results[0].lat, center_lng: r.results[0].lng })).catch(() => {});
     upsert('trip_members', { id: uid(), trip_id: id, email: me, name: me.split('@')[0], role: 'owner' });
     onDone(id);
   }
   return (
     <Sheet title="New trip" onClose={onClose}>
       <label className="f">Where</label>
-      <CitySearch onPick={setCity} />
-      {!city && <input className="in" placeholder="…or just type the city name" value={cityText} onChange={(e) => setCityText(e.target.value)} />}
+      <CitySearch onPick={setCity} onText={setCityText} />
+      {city && <div className="s">✓ {city.city} — travel times and searches will centre here.</div>}
       <label className="f">Trip name (optional)<input className="in" value={name} onChange={(e) => setName(e.target.value)} placeholder={city?.city || 'Paris'} /></label>
       <div className="row">
         <label className="f grow">From<input className="in" type="date" value={start} onChange={(e) => { setStart(e.target.value); if (end < e.target.value) setEnd(e.target.value); }} /></label>
@@ -142,9 +156,8 @@ function NewCity({ onClose, go }) {
   const [txt, setTxt] = useState('');
   return (
     <Sheet title="New city guide" onClose={onClose}>
-      <CitySearch onPick={(c) => go({ view: 'guide', city: c.city })} />
-      <input className="in" placeholder="…or type it" value={txt} onChange={(e) => setTxt(e.target.value)} />
-      <button className="btn block" disabled={!txt.trim()} onClick={() => go({ view: 'guide', city: txt.trim() })}>Open guide</button>
+      <CitySearch onPick={(c) => c && go({ view: 'guide', city: c.city })} onText={setTxt} />
+      <button className="btn block" disabled={!txt.trim()} onClick={() => go({ view: 'guide', city: txt.trim().replace(/^./, (x) => x.toUpperCase()) })}>Open guide</button>
     </Sheet>
   );
 }

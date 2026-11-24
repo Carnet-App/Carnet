@@ -36,9 +36,32 @@ async function geo(url) {
     p.searchParams.set('lon', lng);
     p.searchParams.set('location_bias_scale', '0.6');
   }
-  const r = await fetch(p, { headers: { 'user-agent': UA } });
-  if (!r.ok) return json({ results: [], error: 'osm ' + r.status }, 502);
-  const d = await r.json();
+  let d = null;
+  try {
+    const r = await fetch(p, { headers: { 'user-agent': UA } });
+    if (r.ok) d = await r.json();
+  } catch {}
+  if (!d?.features?.length) {
+    // Fallback: OpenStreetMap's own search (Nominatim; light personal use only).
+    const n = new URL('https://nominatim.openstreetmap.org/search');
+    n.searchParams.set('q', q);
+    n.searchParams.set('format', 'jsonv2');
+    n.searchParams.set('addressdetails', '1');
+    n.searchParams.set('limit', url.searchParams.get('limit') || '5');
+    if (lat && lng) n.searchParams.set('viewbox', `${+lng - 0.3},${+lat + 0.2},${+lng + 0.3},${+lat - 0.2}`);
+    const r2 = await fetch(n, { headers: { 'user-agent': UA, 'accept-language': 'en' } });
+    if (!r2.ok) return json({ results: [], error: 'search ' + r2.status }, 502);
+    const rows = await r2.json();
+    return json({
+      results: rows.map((x) => ({
+        name: x.name || x.display_name.split(',')[0],
+        lat: +x.lat, lng: +x.lon,
+        address: x.display_name.split(',').slice(1, 4).join(',').trim(),
+        city: x.address?.city || x.address?.town || x.address?.village || '',
+        osm_key: x.category, osm_value: x.type, source: 'osm',
+      })),
+    }, 200, { 'cache-control': 'public, max-age=86400' });
+  }
   const results = (d.features || []).map((f) => {
     const pr = f.properties || {};
     const addr = [pr.housenumber, pr.street, pr.district || pr.locality, pr.postcode, pr.city]
