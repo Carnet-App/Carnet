@@ -91,14 +91,14 @@ export async function api(path, params = {}, auth = false) {
 }
 
 // Venue lookup: OpenStreetMap first, Google only as a last resort.
-export async function findVenue(q, near) {
+export async function findVenue(q, near, typeHint) {
   const p = { q, lat: near?.lat, lng: near?.lng };
   let res = [];
   try { res = (await api('/api/geo', p)).results || []; } catch {}
   const best = res.length ? similarity(q, res[0].name) : 0;
   if (best < 0.7) {
     try {
-      const g = (await api('/api/google', p, true)).results || [];
+      const g = (await api('/api/google', { ...p, q: typeHint ? `${q} ${typeHint}` : q }, true)).results || [];
       res = [...g, ...res];
     } catch {}
   }

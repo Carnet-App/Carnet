@@ -30,7 +30,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       setProgress(isVideo ? 'Watching the recording for names on screen…' : 'Reading the image on your phone…');
       const r = isVideo ? await readVideo(file, (p) => setProgress(`Watching the recording… ${Math.round(p * 100)}%`)) : await readImage(file);
       const thumb = r.canvas ? await thumbBlob(r.canvas) : null;
-      await understand({ text: r.text, qr: r.qr, thumb, source: /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : 'screenshot' });
+      await understand({ text: r.text, lines: r.lines, height: r.height, qr: r.qr, thumb, source: /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
     } catch (e) {
       setProgress('Couldn’t read that one: ' + e.message);
       setStage('pick');
@@ -42,7 +42,22 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     let text = link;
     let source = 'manual';
     try {
-      if (/instagram\.com/.test(link)) {
+      if (/maps\.app\.goo\.gl|goo\.gl\/maps|google\.[a-z.]+\/maps|maps\.google\.|maps\.apple\.com/.test(link)) {
+        setProgress('Opening the map link…');
+        const g = await api('/api/maplink', { url: link });
+        if (g.name) {
+          // Exact place from the map app: no guessing needed.
+          const near = g.lat != null ? { lat: g.lat, lng: g.lng } : null;
+          const osm = navigator.onLine ? await findVenue(g.name, near).catch(() => []) : [];
+          const close = osm.find((m) => near && distM(near, m) < 200);
+          const opt = { name: g.name, lat: g.lat ?? close?.lat, lng: g.lng ?? close?.lng, address: close?.address || g.address || '', osm_value: close?.osm_value || '', city: close?.city || '' };
+          setResult({ kind: 'venues', venues: [{ cand: { name: g.name, why: 'map link', weight: 20 }, options: [opt], pick: 0, keep: true, sure: true }], source: 'google', link, city: city || opt.city, collection: null });
+          setStage('venues');
+          return;
+        }
+        text = g.text || link;
+        source = 'google';
+      } else if (/instagram\.com/.test(link)) {
         setProgress('Fetching the caption from Instagram…');
         const r = await api('/api/ig', { url: link });
         text = r.text || '';
@@ -64,28 +79,29 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     await understand({ text, source, link });
   }
 
-  async function understand({ text, qr, thumb, source, link: srcLink }) {
+  async function understand({ text, lines, height, qr, thumb, source, link: srcLink }) {
     if (looksLikeTicket(text, qr)) {
       const tk = parseTicket(text);
       setResult({ kind: 'ticket', ...tk, qr, thumb, text });
       setStage('ticket');
       return;
     }
-    const cands = venueCandidates(text);
+    const cands = venueCandidates(text, lines, height);
     const handle = text.match(/^\s*([a-z0-9._]{3,30})\s*$/im)?.[1];
     const area = areaHint(text);
     setProgress(navigator.onLine ? 'Checking those names on the map…' : 'Offline — these will be checked when you have signal.');
     const venues = [];
     for (const c of cands.slice(0, 6)) {
       let matches = [];
-      if (navigator.onLine) matches = await findVenue(`${c.name} ${area || ''} ${city}`.trim(), near).catch(() => []);
+      if (navigator.onLine) matches = await findVenue(`${c.name} ${area || ''} ${city}`.trim(), near, c.type).catch(() => []);
       const scored = matches
         .map((m) => ({ ...m, sim: similarity(c.name, m.name), far: near && distM(near, m) > 25000 }))
-        .filter((m) => !m.far)
+        .filter((m) => !m.far && !/^(city|town|village|country|state|county|administrative|region|province|postcode|suburb|neighbourhood|quarter|district|locality|political)$/.test(m.osm_value || ''))
         .sort((a, b) => b.sim - a.sim);
       const best = scored[0];
       // Confident only if the name really matches and it's in this city.
       const sure = best && best.sim >= 0.8 && (c.weight >= 3 || best.sim >= 0.95);
+      if (!scored.length && c.weight < 4) continue; // weak guess with no match: don't bother asking
       venues.push({ cand: c, options: scored.slice(0, 3), pick: sure ? 0 : null, keep: sure, sure });
     }
     // Not in a trip and no city yet? Take it from what matched.

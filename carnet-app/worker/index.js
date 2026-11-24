@@ -167,6 +167,37 @@ async function instagram(url) {
   return json({ text, title: d.title || '' });
 }
 
+async function mapLink(url) {
+  // Google Maps / Apple Maps share links → exact name and coordinates, free.
+  let target = url.searchParams.get('url') || '';
+  try {
+    for (let i = 0; i < 6 && /goo\.gl|g\.co\//.test(new URL(target).hostname + new URL(target).pathname); i++) {
+      const r = await fetch(target, { redirect: 'manual', headers: { 'user-agent': UA } });
+      const loc = r.headers.get('location');
+      if (!loc) break;
+      target = new URL(loc, target).href;
+    }
+    const u = new URL(target);
+    let name = null, lat = null, lng = null, address = null;
+    if (/apple\.com$/.test(u.hostname)) {
+      name = u.searchParams.get('q') || u.searchParams.get('name');
+      const ll = (u.searchParams.get('ll') || u.searchParams.get('coordinate') || u.searchParams.get('sll') || '').split(',');
+      if (ll.length === 2) { lat = +ll[0]; lng = +ll[1]; }
+      address = u.searchParams.get('address');
+    } else {
+      const place = u.pathname.match(/\/maps\/place\/([^/]+)/);
+      if (place) name = decodeURIComponent(place[1].replace(/\+/g, ' '));
+      const d = target.match(/!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)/) || target.match(/@(-?\d+\.\d+),(-?\d+\.\d+)/);
+      if (d) { lat = +d[1]; lng = +d[2]; }
+      if (!name) name = u.searchParams.get('q')?.replace(/\+/g, ' ') || null;
+      if (name && name.includes(',')) { address = name.split(',').slice(1).join(',').trim(); name = name.split(',')[0].trim(); }
+    }
+    return json({ name, lat, lng, address, resolved: target });
+  } catch (e) {
+    return json({ name: null, error: String(e) });
+  }
+}
+
 async function transit(url, env) {
   // Paris only for now: Île-de-France Mobilités journey planner (PRIM).
   if (!env.PRIM_TOKEN) return json({ error: 'no transit token' }, 404);
@@ -263,6 +294,8 @@ export default {
       switch (url.pathname) {
         case '/api/geo':
           return geo(url);
+        case '/api/maplink':
+          return mapLink(url);
         case '/api/og':
           return ogImage(url);
         case '/api/ig':

@@ -46,17 +46,20 @@ export function readQR(canvas) {
 
 export async function readText(canvasOrImg, onProgress) {
   const w = await ocrWorker();
-  const { data } = await w.recognize(canvasOrImg);
+  const { data } = await w.recognize(canvasOrImg, {}, { text: true, blocks: true });
   onProgress?.(1);
-  return data.text || '';
+  const lines = [];
+  for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || [])
+    lines.push({ text: (l.text || '').trim(), y: l.bbox.y0, h: l.bbox.y1 - l.bbox.y0, conf: l.confidence });
+  return { text: data.text || '', lines, height: canvasOrImg.height || 1 };
 }
 
 export async function readImage(file, onProgress) {
   const { img, url } = await loadImage(file);
   const canvas = toCanvas(img);
   const qr = readQR(canvas);
-  const text = await readText(canvas, onProgress);
-  return { text, qr, url, canvas };
+  const { text, lines, height } = await readText(canvas, onProgress);
+  return { text, lines, height, qr, url, canvas };
 }
 
 // Screen recordings: look at ~1 frame a second, skip frames that barely changed.
@@ -81,7 +84,7 @@ export async function readVideo(file, onProgress) {
     if (last && diff(sig, last) < 6) continue;
     last = sig;
     qr = qr || readQR(c);
-    const text = await readText(c);
+    const { text } = await readText(c);
     for (const line of text.split('\n')) {
       const k = line.trim().toLowerCase();
       if (k.length > 2 && !seen.has(k)) { seen.add(k); texts.push(line.trim()); }
@@ -137,35 +140,77 @@ export function parseTicket(text, year = new Date().getFullYear()) {
   return { title, day, time, ref };
 }
 
-// Candidate venue names from an Instagram post / screenshot / caption.
-export function venueCandidates(text) {
+// Words from app screens (Google Maps, Instagram, browsers) that are never a venue name.
+const UI = /^(directions|start|reserve|call|share|save|saved|website|menu|overview|reviews|photos|about|updates|open|closed|closes|opens|search|dogs allowed|top rated|know before you go|visitors|follow|following|like|reply|view|liked|more|sponsored|original audio|see translation|comments?|send|message|order online|book|tickets?|map|explore|you|go|done|cancel|edit)\b/i;
+const MONTH = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/i;
+
+function junk(name) {
+  const letters = (name.match(/\p{L}/gu) || []).length;
+  if (letters < 3) return true;
+  if (/\d{1,2}[:h.]\d{2}/.test(name)) return true;               // times
+  if (/^\d/.test(name) && MONTH.test(name)) return true;           // dates
+  if (/^(\d+\s*)+(min|hr|h|km|m|mi)\b/i.test(name)) return true; // distances
+  if (/\d[.,]\d\s*[★*]|\(\d[\d,.]*\)/.test(name)) return true;   // ratings
+  if (/€|£|\$/.test(name)) return true;
+  if (UI.test(name)) return true;
+  return false;
+}
+
+// Candidate venue names from a screenshot / caption / page text.
+// lines (with positions and sizes) come from the on-device reader when there's an image.
+export function venueCandidates(text, lines = null, height = 1) {
   const out = [];
   const add = (name, why, weight) => {
+    // OCR leaves icon debris at line ends ("ROJO oO m6 x"): drop trailing 1–2 character bits.
+    name = name.replace(/(\s+\S{1,2})+\s*$/u, (m) => (/[A-ZÀ-Ý]{2}/.test(m) ? m : ''));
     name = name.replace(/[#*_|•·]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}')]+$/gu, '');
-    if (name.length < 3 || name.length > 48) return;
-    if (/^(follow|like|reply|view|liked|more|sponsored|original audio|see translation|comments?|share|save)\b/i.test(name)) return;
+    if (name.length < 3 || name.length > 48 || junk(name)) return;
     const k = name.toLowerCase();
     const ex = out.find((o) => o.name.toLowerCase() === k);
-    if (ex) ex.weight += weight;
+    if (ex) { ex.weight += weight; if (weight > 3) ex.why = why; }
     else out.push({ name, why, weight });
   };
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  for (const l of lines) {
+  const all = text.split('\n').map((l) => l.trim()).filter(Boolean);
+
+  // Google Maps place card: the name sits right above the rating line ("3.8 ★★★★ (387)").
+  const isMaps =
+    /^\d[.,]\d\b.*\(\d[\d,.]*\)/m.test(text) ||
+    (text.match(/\b(directions|start|reserve|call|website|order online)\b/gi) || []).length >= 2;
+  for (let i = 1; i < all.length; i++) {
+    if (/^\d[.,]\d\b.*\(\d[\d,.]*\)/.test(all[i]) || (isMaps && /^\d[.,]\d\b/.test(all[i]))) {
+      add(all[i - 1], 'Google Maps place', 12);
+      const typeLine = all[i + 1] || '';
+      if (out.length) out[out.length - 1].type = typeLine.split(/[·•-]/)[0].trim();
+    }
+  }
+  // A Google Maps place card is about one place: don't guess at map labels around it.
+  const card = out.filter((o) => o.why === 'Google Maps place');
+  if (card.length) return card;
+
+  for (const l of all) {
     const pin = l.match(/(?:📍|📌|location:|address:|adresse\s*:)\s*(.+)/i);
     if (pin) add(pin[1].split(/[,–—-]/)[0], 'pin / location', 5);
     for (const m of l.matchAll(/@([a-z0-9._]{3,30})/gi)) add(m[1].replace(/[._]/g, ' '), '@mention', 2);
     const num = l.match(/^\s*(?:\d{1,2}[.)]|[-•])\s*(.+)/);
     if (num) add(num[1].split(/[,–—:(-]/)[0], 'list item', 3);
   }
-  // The location tag sits on the line right under the account name in a post screenshot.
-  for (let i = 0; i < Math.min(lines.length - 1, 12); i++) {
-    if (/^[a-z0-9._]{3,30}$/i.test(lines[i]) && lines[i + 1] && lines[i + 1].length < 45 && !/\d{2}:\d{2}/.test(lines[i + 1]))
-      add(lines[i + 1].split(',')[0], 'location tag', 4);
+  // Instagram: the location tag sits on the line right under the account name.
+  if (!isMaps)
+    for (let i = 0; i < Math.min(all.length - 1, 12); i++) {
+      if (/^[a-z0-9._]{3,30}$/i.test(all[i]) && all[i + 1] && all[i + 1].length < 45 && !/\d{2}:\d{2}/.test(all[i + 1]))
+        add(all[i + 1].split(',')[0], 'location tag', 4);
+    }
+  // The biggest text on screen (below the status bar) is usually the name.
+  if (lines?.length) {
+    const body = lines.filter((l) => l.y > height * 0.06 && l.text && l.conf > 50);
+    const big = [...body].sort((a, b) => b.h - a.h).slice(0, 3);
+    big.forEach((l, i) => add(l.text, 'largest text', 4 - i));
   }
-  // Short title-case lines are good guesses too.
-  for (const l of lines.slice(0, 40)) {
-    if (l.length <= 32 && /^[A-ZÀ-Ý0-9][\p{L}0-9'’&\- ]+$/u.test(l) && l.split(' ').length <= 5) add(l, 'heading', 1);
-  }
+  // Short title-case lines are weak guesses (skipped on map screenshots: street labels).
+  if (!isMaps)
+    for (const l of all.slice(0, 40)) {
+      if (l.length <= 32 && /^[A-ZÀ-Ý0-9][\p{L}0-9'’&\- ]+$/u.test(l) && l.split(' ').length <= 5) add(l, 'heading', 1);
+    }
   return out.sort((a, b) => b.weight - a.weight).slice(0, 8);
 }
 
