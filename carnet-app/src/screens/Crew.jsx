@@ -62,9 +62,13 @@ export default function Crew({ t, me, onClose, go }) {
           {members.map((m, i) => (
             <div key={m.id} className="li">
               <Avatar name={m.name || m.email} i={i} size={36} />
-              <div className="grow">
-                <div className="n">{m.name || m.email}{m.email.toLowerCase() === me ? ' (you)' : ''}</div>
-                <div className="s">{m.role === 'owner' ? 'Organiser' : m.invited_at ? `Invited ${new Date(m.invited_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : m.email}</div>
+              <div className="grow" style={{ minWidth: 0 }}>
+                {m.email.toLowerCase() === me ? (
+                  <input className="n" aria-label="Your name" defaultValue={m.name || ''} placeholder="Your name"
+                    onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== m.name && upsert('trip_members', { id: m.id, name: e.target.value.trim() })}
+                    style={{ border: 0, background: 'transparent', padding: 0, width: '100%', fontSize: 18 }} />
+                ) : <div className="n">{m.name || m.email}</div>}
+                <div className="s" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email.toLowerCase() === me ? (m.role === 'owner' ? 'You · organiser · tap your name to change it' : 'You · tap your name to change it') : m.role === 'owner' ? 'Organiser' : m.invited_at ? `Invited ${new Date(m.invited_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : m.email}</div>
               </div>
               {m.email.toLowerCase() !== me && (
                 <div className="row" style={{ gap: 6 }}>
