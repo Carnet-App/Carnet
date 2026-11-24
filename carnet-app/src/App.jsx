@@ -21,6 +21,7 @@ export default function App() {
   const [route, setRoute] = useState({ view: 'home', tab: 'today', ...saved, overlay: null });
   const online = useStore((s) => s.online);
   const pending = useStore((s) => s.outbox.length);
+  const failed = useStore((s) => s.failed);
 
   useEffect(() => {
     loadLocal();
@@ -40,11 +41,13 @@ export default function App() {
   if (session === undefined) return <div className="app" />;
   if (!session) return <Login />;
 
-  const status = !online ? `Offline${pending ? ` · ${pending} waiting to sync` : ''}` : pending ? `Syncing ${pending}…` : null;
+  const status = failed.length
+    ? `${failed.length} change${failed.length > 1 ? 's' : ''} not saved to the server — kept on this phone`
+    : !online ? `Offline${pending ? ` · ${pending} waiting to sync` : ''}` : pending ? `Syncing ${pending}…` : null;
 
   return (
     <div className="app">
-      {status && <div className="status">{status}</div>}
+      {status && <div className="status" title={failed[0]?.error} onClick={() => failed.length && alert('Server said: ' + failed[failed.length - 1].error)}>{status}</div>}
       {route.view === 'home' && <Home me={me} go={go} />}
       {route.view === 'guide' && <Places city={route.city} me={me} go={go} onBack={() => go({ view: 'home' })} />}
       {route.view === 'trip' && <TripShell route={route} go={go} me={me} setRoute={setRoute} />}

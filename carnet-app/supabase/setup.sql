@@ -152,7 +152,7 @@ drop policy if exists trips_select on public.trips;
 drop policy if exists trips_insert on public.trips;
 drop policy if exists trips_update on public.trips;
 drop policy if exists trips_delete on public.trips;
-create policy trips_select on public.trips for select to authenticated using (public.is_member(id));
+create policy trips_select on public.trips for select to authenticated using (owner = auth.uid() or public.is_member(id));
 create policy trips_insert on public.trips for insert to authenticated with check (owner = auth.uid());
 create policy trips_update on public.trips for update to authenticated using (public.is_member(id));
 create policy trips_delete on public.trips for delete to authenticated using (owner = auth.uid());

@@ -100,7 +100,7 @@ export async function pull() {
   if (!navigator.onLine) return;
   const { data } = await supabase.auth.getSession();
   if (!data.session) return;
-  const pending = new Set(state.outbox.map((j) => j.table + ':' + (j.row?.id || j.id)));
+  const pending = new Set([...state.outbox, ...state.failed].map((j) => j.table + ':' + (j.row?.id || j.id)));
   for (const table of TABLES) {
     const { data: rows, error } = await supabase.from(table).select('*').limit(5000);
     if (error) continue;
@@ -108,7 +108,8 @@ export async function pull() {
     for (const r of rows) next[r.id] = { ...(state[table][r.id] || {}), ...r };
     // keep anything not yet sent, and local-only extras
     for (const [id, r] of Object.entries(state[table])) {
-      if (pending.has(table + ':' + id)) next[id] = r;
+      if (pending.has(table + ':' + id) && !next[id]) next[id] = r;
+      else if (pending.has(table + ':' + id)) next[id] = { ...next[id], ...r };
       else if (next[id]) for (const k of LOCAL_ONLY[table] || []) if (r[k]) next[id][k] = r[k];
     }
     state[table] = next;
@@ -119,7 +120,21 @@ export async function pull() {
 }
 
 let channel;
+// Anything the server refused gets another go each time the app opens,
+// so a fix on the server side brings it back rather than losing it.
+function requeueFailed() {
+  if (!state.failed.length) return;
+  for (const job of state.failed) {
+    if (job.op === 'upsert') state[job.table] = { ...state[job.table], [job.row.id]: job.row };
+  }
+  state.outbox = [...state.failed.map(({ error, at, ...j }) => j), ...state.outbox];
+  state.failed = [];
+  emit();
+  persist();
+}
+
 export function startSync() {
+  requeueFailed();
   const goOnline = () => { state.online = true; emit(); flush().then(pull); };
   const goOffline = () => { state.online = false; emit(); };
   window.addEventListener('online', goOnline);
