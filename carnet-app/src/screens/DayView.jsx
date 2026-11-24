@@ -61,6 +61,18 @@ export default function DayView({ t, me, day, pos }) {
           </div>
         );
       })}
+      {t.proposals.filter((p) => p.status === 'pending' && p.kind !== 'remove' && (p.payload?.day || p.before?.day) === day).map((p) => {
+        const a = { ...(p.before || {}), ...(p.payload || {}) };
+        return (
+          <div key={p.id} className="tl">
+            <div className="tm">{hm(a.start_time)}</div>
+            <div className="it" style={{ background: 'transparent', border: '1.5px dashed #C9A96E', cursor: 'default' }}>
+              <div className="k amber">{nameOf(t.members, p.proposed_by_email)} proposes{p.kind === 'change' ? ' a change' : ''} · waiting</div>
+              <div className="n" style={{ color: 'var(--mute)' }}>{a.title}</div>
+            </div>
+          </div>
+        );
+      })}
       {loose.length > 0 && (
         <>
           <div className="k mute" style={{ marginTop: 8 }}>Sometime this day</div>

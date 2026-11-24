@@ -56,7 +56,7 @@ export default function App() {
 }
 
 function TripShell({ route, go, me, setRoute }) {
-  const t = useTrip(route.tripId);
+  const t = useTrip(route.tripId, me);
   if (!t.trip) return (
     <div className="page"><div className="empty">This trip isn’t on this phone yet.<br /><button className="btn" style={{ marginTop: 14 }} onClick={() => go({ view: 'home' })}>Back to trips</button></div></div>
   );

@@ -4,7 +4,7 @@ import { get, set } from 'idb-keyval';
 import { useSyncExternalStore } from 'react';
 import { supabase } from './supabase';
 
-export const TABLES = ['trips', 'trip_members', 'stays', 'places', 'items', 'private_notes', 'expenses', 'settlements'];
+export const TABLES = ['trips', 'trip_members', 'stays', 'places', 'items', 'private_notes', 'expenses', 'settlements', 'proposals'];
 
 let state = { ...Object.fromEntries(TABLES.map((t) => [t, {}])), outbox: [], failed: [], online: navigator.onLine, syncedAt: null };
 const listeners = new Set();
@@ -36,6 +36,7 @@ export const uid = () => crypto.randomUUID();
 export async function loadLocal() {
   const saved = await get('carnet-state').catch(() => null);
   if (saved) state = { ...state, ...saved, online: navigator.onLine };
+  for (const t of TABLES) state[t] = state[t] || {};
   emit();
 }
 

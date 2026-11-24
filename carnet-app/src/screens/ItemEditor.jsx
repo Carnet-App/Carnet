@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { Sheet, Seg, Icon } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
 import { CATS, daysBetween, dayLabel, findVenue, guessCategory } from '../lib/util';
+import { needsApproval, propose, announce } from '../lib/proposals';
 
 // Add or edit something on the trip: from the guide, a search, or typed in.
 export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
@@ -42,16 +43,32 @@ export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
       lat: f.lat, lng: f.lng, address: f.address || null, booking_ref: f.booking_ref || null,
       qr_text: f.qr_text || null, attachment_path: f.attachment_path || null, attachment_local: f.attachment_local,
     };
+    const after = { ...row, title: f.title.trim(), notes: f.notes || null };
+    if (needsApproval(t, item, after)) {
+      propose(t, item ? 'change' : 'add', item, after);
+      onClose();
+      return;
+    }
     if (f.visibility === 'busy') {
       // The crew sees "Busy"; the real title and notes stay in a table only you can read.
       upsert('items', { ...row, title: 'Busy', notes: null });
       upsert('private_notes', { id, title: f.title, notes: f.notes || null });
     } else {
-      upsert('items', { ...row, title: f.title.trim(), notes: f.notes || null });
+      upsert('items', after);
       if (item?.mine_private) remove('private_notes', id);
+      announce(t, item, after);
     }
     onClose();
   }
+
+  function del() {
+    if (needsApproval(t, item, null)) {
+      if (confirm('Propose removing this? An admin will approve it.')) { propose(t, 'remove', item, null); onClose(); }
+      return;
+    }
+    if (confirm('Remove this from the trip?')) { remove('items', item.id); announce(t, item, null); onClose(); }
+  }
+  const asksApproval = needsApproval(t, item, { visibility: f.visibility, day: f.day });
 
   return (
     <Sheet title={item ? 'Edit' : 'Add to the trip'} onClose={onClose}>
@@ -96,10 +113,9 @@ export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
       <div className="s">{{ shared: 'The whole crew sees it.', busy: 'The crew sees a grey “busy” block — not what it is.', hidden: 'Only you can see it.' }[f.visibility]}</div>
       {f.status === 'booked' && <label className="f">Booking ref<input className="in" value={f.booking_ref || ''} onChange={(e) => set('booking_ref', e.target.value)} /></label>}
       <label className="f">Notes<textarea className="in" value={f.notes || ''} onChange={(e) => set('notes', e.target.value)} /></label>
-      <button className="btn block" disabled={!f.title.trim()} onClick={save}>{item ? 'Save' : 'Add'}</button>
-      {item && (
-        <button className="btn ghost block" onClick={() => { if (confirm('Remove this from the trip?')) { remove('items', item.id); onClose(); } }}>Remove</button>
-      )}
+      {asksApproval && <div className="card dashed s">This changes the shared schedule, so it goes to {t.members.filter((m) => ['owner', 'admin'].includes(m.role)).map((m) => m.name || m.email.split('@')[0]).join(' or ') || 'the trip admin'} to approve. Ideas with no day, and your own Busy / Just-me time, go straight in.</div>}
+      <button className="btn block" disabled={!f.title.trim()} onClick={save}>{asksApproval ? 'Propose' : item ? 'Save' : 'Add'}</button>
+      {item && <button className="btn ghost block" onClick={del}>{needsApproval(t, item, null) ? 'Propose removing' : 'Remove'}</button>}
     </Sheet>
   );
 }

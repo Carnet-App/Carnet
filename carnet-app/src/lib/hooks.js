@@ -3,7 +3,7 @@ import { useStore } from './store';
 
 const vals = (o) => Object.values(o || {});
 
-export function useTrip(tripId) {
+export function useTrip(tripId, me) {
   const s = useStore();
   return useMemo(() => {
     const trip = s.trips[tripId];
@@ -14,8 +14,15 @@ export function useTrip(tripId) {
       const p = s.private_notes[it.id];
       return p ? { ...it, title: p.title || it.title, notes: p.notes ?? it.notes, mine_private: true } : it;
     });
+    const mine = members.find((m) => m.email?.toLowerCase() === me);
+    const admin = mine ? ['owner', 'admin'].includes(mine.role) : !trip.owner || members.length === 0;
     return {
       trip,
+      me,
+      myRole: mine?.role || 'member',
+      isAdmin: admin,
+      canEdit: admin || trip.approval === false,
+      proposals: by('proposals').sort((a, b) => (b.created_at || '').localeCompare(a.created_at || '')),
       members,
       stays: by('stays'),
       items,

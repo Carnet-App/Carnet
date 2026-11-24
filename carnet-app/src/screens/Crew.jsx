@@ -3,6 +3,7 @@ import { Sheet, Avatar, Icon } from '../ui';
 import { upsert, remove, uid, flush } from '../lib/store';
 import { authHeader } from '../lib/supabase';
 import { findVenue, dayLabel, nameOf } from '../lib/util';
+import { pushSupport, enablePush, disablePush } from '../lib/push';
 
 // People on the trip, where you're staying, and trip settings.
 export default function Crew({ t, me, onClose, go }) {
@@ -13,7 +14,8 @@ export default function Crew({ t, me, onClose, go }) {
   const [stayQ, setStayQ] = useState('');
   const [stayRes, setStayRes] = useState(null);
   const [stayDates, setStayDates] = useState({ from: trip.start_date, to: trip.end_date });
-  const isOwner = members.find((m) => m.email.toLowerCase() === me)?.role === 'owner';
+  const isOwner = t.myRole === 'owner';
+  const [push, setPush] = useState(pushSupport());
   const myName = nameOf(members, me);
 
   async function sendInvite(m) {
@@ -70,6 +72,9 @@ export default function Crew({ t, me, onClose, go }) {
                 ) : <div className="n">{m.name || m.email}</div>}
                 <div className="s" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email.toLowerCase() === me ? (m.role === 'owner' ? 'You · organiser · tap your name to change it' : 'You · tap your name to change it') : m.role === 'owner' ? 'Organiser' : m.invited_at ? `Invited ${new Date(m.invited_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : m.email}</div>
               </div>
+              {m.email.toLowerCase() !== me && t.isAdmin && m.role !== 'owner' && (
+                <button className="btn sm ghost" style={{ padding: '0 8px' }} onClick={() => upsert('trip_members', { id: m.id, role: m.role === 'admin' ? 'member' : 'admin' })}>{m.role === 'admin' ? 'Admin ✓' : 'Make admin'}</button>
+              )}
               {m.email.toLowerCase() !== me && (
                 <div className="row" style={{ gap: 6 }}>
                   <button className="btn sm ghost" onClick={() => sendInvite(m)}>{m.invited_at ? 'Resend' : 'Invite'}</button>
@@ -115,10 +120,25 @@ export default function Crew({ t, me, onClose, go }) {
         </>
       )}
 
+      <div className="k mute" style={{ marginTop: 6 }}>Notifications on this phone</div>
+      <div className="card between">
+        <div className="s" style={{ flex: 1 }}>
+          {push === 'granted' ? 'On — proposals, approvals, new plans and costs.' : push === 'denied' ? 'Blocked. Turn on in iPhone Settings → Notifications → Carnet.' : push === 'needs-home-screen' ? 'On iPhone, add Carnet to your Home Screen first (Share → Add to Home Screen), then open it from there.' : push === 'unsupported' ? 'This browser can’t do notifications.' : 'Get told about proposals, approvals, new plans and costs.'}
+        </div>
+        {push === 'default' && <button className="btn sm" onClick={async () => { try { setPush(await enablePush()); } catch (e) { setMsg('Couldn’t turn on: ' + e.message); } }}>Turn on</button>}
+        {push === 'granted' && <button className="btn sm ghost" onClick={async () => { await disablePush(); setPush('default'); }}>Turn off</button>}
+      </div>
+
+      <div className="k mute" style={{ marginTop: 6 }}>Schedule changes</div>
+      <label className="card between" style={{ cursor: t.isAdmin ? 'pointer' : 'default' }}>
+        <div className="s" style={{ flex: 1 }}>{trip.approval === false ? 'Everyone edits the schedule directly.' : 'Admins edit directly; everyone else proposes and an admin approves.'}</div>
+        <input type="checkbox" disabled={!t.isAdmin} checked={trip.approval !== false} onChange={(e) => upsert('trips', { id: trip.id, approval: e.target.checked })} style={{ width: 22, height: 22, accentColor: '#1E1A16' }} aria-label="Changes need approval" />
+      </label>
+
       <div className="k mute" style={{ marginTop: 6 }}>Trip</div>
       <div className="row">
-        <label className="f grow">From<input className="in" type="date" defaultValue={trip.start_date} onBlur={(e) => upsert('trips', { id: trip.id, start_date: e.target.value })} /></label>
-        <label className="f grow">To<input className="in" type="date" defaultValue={trip.end_date} onBlur={(e) => upsert('trips', { id: trip.id, end_date: e.target.value })} /></label>
+        <label className="f grow">From<input className="in" type="date" disabled={!t.isAdmin} defaultValue={trip.start_date} onBlur={(e) => upsert('trips', { id: trip.id, start_date: e.target.value })} /></label>
+        <label className="f grow">To<input className="in" type="date" disabled={!t.isAdmin} defaultValue={trip.end_date} onBlur={(e) => upsert('trips', { id: trip.id, end_date: e.target.value })} /></label>
       </div>
       <label className="f">Currency<select className="in" value={trip.currency || 'EUR'} onChange={(e) => upsert('trips', { id: trip.id, currency: e.target.value })}>{['EUR', 'GBP', 'USD', 'CHF', 'DKK', 'SEK', 'CZK', 'PLN', 'HUF'].map((c) => <option key={c}>{c}</option>)}</select></label>
       <button className="btn ghost block" onClick={() => go({ view: 'home' })}>All trips & city guides</button>

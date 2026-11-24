@@ -4,6 +4,9 @@
 //   PRIM_TOKEN   (secret, optional)  Paris Métro/RER journey times
 //   GOOGLE_KEY   (secret, optional)  last-resort venue search + photos
 //   RESEND_KEY   (secret)            "join my trip" emails
+//   VAPID_PRIVATE (secret)           push notifications (JSON key)
+
+import { buildPushHTTPRequest } from '@pushforge/builder';
 
 const UA = 'Carnet/1.0 (personal trip planner; trips.sebwalker.co.uk)';
 
@@ -217,6 +220,41 @@ async function invite(req, env) {
   return r.ok ? json({ ok: true }) : json({ error: 'resend ' + r.status + ' ' + (await r.text()).slice(0, 200) }, 502);
 }
 
+async function notify(req, env) {
+  // Sends a push to people on a trip. The database decides who: the caller must be on the trip,
+  // and the caller's own phones are never included.
+  if (!env.VAPID_PRIVATE) return json({ error: 'Push isn’t set up yet (VAPID_PRIVATE).' }, 404);
+  const auth = req.headers.get('authorization');
+  const { tripId, title, body, url, adminsOnly, onlyEmail, tag } = await req.json();
+  const targets = await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/trip_push_targets`, {
+    method: 'POST',
+    headers: { authorization: auth, apikey: env.SUPABASE_KEY, 'content-type': 'application/json' },
+    body: JSON.stringify({ t: tripId, admins_only: !!adminsOnly, only_email: onlyEmail || null }),
+  }).then((r) => (r.ok ? r.json() : []));
+  const privateJWK = JSON.parse(env.VAPID_PRIVATE);
+  let sent = 0;
+  await Promise.all(
+    targets.map(async (t) => {
+      try {
+        const r = await buildPushHTTPRequest({
+          privateJWK,
+          subscription: { endpoint: t.endpoint, keys: { p256dh: t.p256dh, auth: t.auth } },
+          message: { payload: { title, body, url, tag }, adminContact: 'mailto:trips@mail.sebwalker.co.uk', options: { ttl: 60 * 60 * 12, urgency: 'high' } },
+        });
+        const res = await fetch(r.endpoint, { method: 'POST', headers: r.headers, body: r.body });
+        if (res.status === 404 || res.status === 410) {
+          await fetch(`${env.SUPABASE_URL}/rest/v1/rpc/forget_push_endpoint`, {
+            method: 'POST',
+            headers: { authorization: auth, apikey: env.SUPABASE_KEY, 'content-type': 'application/json' },
+            body: JSON.stringify({ e: t.endpoint }),
+          });
+        } else if (res.ok) sent++;
+      } catch {}
+    }),
+  );
+  return json({ ok: true, sent, targets: targets.length });
+}
+
 export default {
   async fetch(req, env) {
     const url = new URL(req.url);
@@ -240,8 +278,11 @@ export default {
         case '/api/invite':
           if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
           return invite(req, env);
+        case '/api/notify':
+          if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
+          return notify(req, env);
         case '/api/health':
-          return json({ ok: true, transit: !!env.PRIM_TOKEN, google: !!env.GOOGLE_KEY });
+          return json({ ok: true, transit: !!env.PRIM_TOKEN, google: !!env.GOOGLE_KEY, email: !!env.RESEND_KEY, push: !!env.VAPID_PRIVATE });
         default:
           return json({ error: 'not found' }, 404);
       }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Icon, Avatar } from '../ui';
 import DayView from './DayView';
+import Proposals, { ProposalBanner } from './Proposals';
 import { dayLabel, daysBetween, todayISO, useLocation, stayFor, walkMin, toMin, hm, api, distM } from '../lib/util';
 
 function useTransit(from, to, enabled) {
@@ -15,6 +16,7 @@ function useTransit(from, to, enabled) {
 }
 
 export default function Today({ t, me, open }) {
+  const [review, setReview] = useState(false);
   const { trip, members, stays, items } = t;
   const days = daysBetween(trip.start_date, trip.end_date);
   const today = todayISO();
@@ -82,6 +84,8 @@ export default function Today({ t, me, open }) {
         </button>
       )}
 
+      <ProposalBanner t={t} onOpen={() => setReview(true)} />
+      {review && <Proposals t={t} onClose={() => setReview(false)} />}
       <div className="between">
         <span className="k mute">The day</span>
         <button className="link" onClick={() => open({ name: 'map' })}>Map</button>

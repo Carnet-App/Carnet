@@ -26,6 +26,7 @@ export default defineConfig({
         // including the on-device text reader (≈25 MB, downloaded once).
         globPatterns: ['**/*.{js,css,html,png,ttf,wasm,gz}', 'ocr/**/*'],
         maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
+        importScripts: ['/push-sw.js'],
         navigateFallback: '/index.html',
         navigateFallbackDenylist: [/^\/api\//],
         runtimeCaching: [

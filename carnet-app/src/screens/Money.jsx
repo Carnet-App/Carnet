@@ -6,6 +6,7 @@ import { parseReceipt } from '../lib/receipt';
 import { readImage, thumbBlob } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { money, nameOf } from '../lib/util';
+import { notify } from '../lib/push';
 
 export default function Money({ t, me }) {
   const { members, expenses, settlements, trip } = t;
@@ -88,6 +89,7 @@ function CostSheet({ t, me, e, onClose }) {
 
   function save() {
     const shares = mode === 'evenly' ? evenShares(amt, who) : Object.fromEntries(Object.entries(custom).map(([k, v]) => [k, parseFloat(String(v).replace(',', '.')) || 0]).filter(([, v]) => v));
+    if (!e) notify(t.trip.id, { title: `${nameOf(t.members, me)} added ${title.trim()}`, body: `${money(amt, t.trip.currency)} · you owe ${money(shares[payer === me ? '' : me] || 0, t.trip.currency)}`, tag: 'money' });
     upsert('expenses', { id: e?.id || uid(), trip_id: t.trip.id, title: title.trim(), amount: amt, currency: t.trip.currency || 'EUR', payer_email: payer, shares, method: mode === 'evenly' ? (who.length === emails.length ? 'evenly' : who.map((x) => nameOf(t.members, x)).join(' + ')) : 'custom' });
     onClose();
   }
@@ -166,6 +168,7 @@ function ReceiptSplit({ t, me, onClose }) {
 
   async function submit() {
     const path = thumb ? await storeFile(thumb, { tripId: t.trip.id }) : null;
+    notify(t.trip.id, { title: `${nameOf(t.members, me)} split ${title || 'the bill'}`, body: `${money(result.total, t.trip.currency)} · see your share`, tag: 'money' });
     upsert('expenses', {
       id: uid(), trip_id: t.trip.id, title: title || 'Dinner', amount: result.total, currency: t.trip.currency || 'EUR', payer_email: payer,
       shares: Object.fromEntries(Object.entries(result.shares).filter(([, v]) => v)), method: { item: 'per item, from receipt', even: 'evenly, from receipt', pct: 'by %, from receipt' }[mode],

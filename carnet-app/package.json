@@ -10,6 +10,7 @@
     "deploy": "npm run build && wrangler deploy"
   },
   "dependencies": {
+    "@pushforge/builder": "^2.0.5",
     "@supabase/supabase-js": "^2.119.2",
     "@tesseract.js-data/eng": "^1.0.0",
     "@tesseract.js-data/fra": "^1.0.0",

@@ -1,0 +1,5 @@
+node_modules
+dist
+public/ocr
+.wrangler
+.DS_Store
