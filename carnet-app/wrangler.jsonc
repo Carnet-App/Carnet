@@ -1,0 +1,18 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "carnet",
+  "main": "worker/index.js",
+  "compatibility_date": "2026-11-01",
+  "assets": {
+    "directory": "./dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application"
+  },
+  "routes": [{ "pattern": "trips.sebwalker.co.uk", "custom_domain": true }],
+  "triggers": { "crons": ["17 4 * * *"] },
+  "vars": {
+    "SUPABASE_URL": "https://mefdtuuvfzpegknhubpn.supabase.co",
+    "SUPABASE_KEY": "sb_publishable_Dqs26OK9TGbDdVEAMmkDgg_0bRFSHph"
+  },
+  "observability": { "enabled": true }
+}

@@ -1,0 +1,105 @@
+import { useState } from 'react';
+import { Sheet, Seg, Icon } from '../ui';
+import { upsert, remove, uid } from '../lib/store';
+import { CATS, daysBetween, dayLabel, findVenue, guessCategory } from '../lib/util';
+
+// Add or edit something on the trip: from the guide, a search, or typed in.
+export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
+  const { trip, places } = t;
+  const days = daysBetween(trip.start_date, trip.end_date);
+  const [f, setF] = useState(() => {
+    const b = {
+      title: '', category: 'explore', day: days[0], start_time: '', end_time: '', visibility: 'shared', status: 'planned',
+      notes: '', booking_ref: '', place_id: null, lat: null, lng: null, address: '',
+      ...preset, ...(item || {}),
+    };
+    return { ...b, start_time: (b.start_time || '').slice(0, 5), end_time: (b.end_time || '').slice(0, 5) };
+  });
+  const [q, setQ] = useState('');
+  const [res, setRes] = useState([]);
+  const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
+
+  const fromGuide = places.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).slice(0, 6);
+  async function search() {
+    const near = trip.center_lat ? { lat: trip.center_lat, lng: trip.center_lng } : null;
+    setRes(await findVenue(q + ' ' + trip.city, near).catch(() => []));
+  }
+  function usePlace(p, fromSearch) {
+    let place_id = p.id;
+    if (fromSearch) {
+      place_id = uid();
+      upsert('places', { id: place_id, city: trip.city, name: p.name, category: guessCategory(p.osm_value, p.name), address: p.address, lat: p.lat, lng: p.lng, source: p.source });
+    }
+    setF((x) => ({ ...x, title: p.name, place_id, lat: p.lat, lng: p.lng, address: p.address || '', category: p.category || guessCategory(p.osm_value, p.name) }));
+    setRes([]); setQ('');
+  }
+
+  function save() {
+    const id = item?.id || uid();
+    const row = {
+      id, trip_id: trip.id, place_id: f.place_id, category: f.category, day: f.day || null,
+      start_time: f.start_time || null, end_time: f.end_time || null, visibility: f.visibility, status: f.status,
+      lat: f.lat, lng: f.lng, address: f.address || null, booking_ref: f.booking_ref || null,
+      qr_text: f.qr_text || null, attachment_path: f.attachment_path || null, attachment_local: f.attachment_local,
+    };
+    if (f.visibility === 'busy') {
+      // The crew sees "Busy"; the real title and notes stay in a table only you can read.
+      upsert('items', { ...row, title: 'Busy', notes: null });
+      upsert('private_notes', { id, title: f.title, notes: f.notes || null });
+    } else {
+      upsert('items', { ...row, title: f.title.trim(), notes: f.notes || null });
+      if (item?.mine_private) remove('private_notes', id);
+    }
+    onClose();
+  }
+
+  return (
+    <Sheet title={item ? 'Edit' : 'Add to the trip'} onClose={onClose}>
+      {!item && (
+        <div className="col">
+          <div className="row">
+            <input className="in" placeholder="Search your guide or anywhere…" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && search()} />
+            <button className="icon" aria-label="Search the map" onClick={search}><Icon n="search" size={18} /></button>
+          </div>
+          {(q ? fromGuide : places.slice(0, 0)).map((p) => (
+            <button key={p.id} className="card" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => usePlace(p)}>
+              <div className="n">{p.name}</div><div className="s">From your {trip.city} guide · {p.address || ''}</div>
+            </button>
+          ))}
+          {res.map((p, i) => (
+            <button key={i} className="card" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => usePlace(p, true)}>
+              <div className="n">{p.name}</div><div className="s">{p.source === 'google' ? 'Google' : 'Map'} · {p.address}</div>
+            </button>
+          ))}
+        </div>
+      )}
+      <label className="f">What<input className="in" value={f.title} onChange={(e) => set('title', e.target.value)} placeholder="Dinner, a gallery, coffee with a friend…" /></label>
+      <div className="chips">
+        {Object.entries(CATS).map(([k, c]) => (
+          <button key={k} type="button" className={'chip' + (f.category === k ? ' on' : '')} onClick={() => set('category', k)}>{c.label}</button>
+        ))}
+      </div>
+      <div className="row">
+        <label className="f grow">Day
+          <select className="in" value={f.day || ''} onChange={(e) => set('day', e.target.value || null)}>
+            <option value="">No day yet</option>
+            {days.map((d) => <option key={d} value={d}>{dayLabel(d)}</option>)}
+          </select>
+        </label>
+        <label className="f" style={{ width: 96 }}>From<input className="in" type="time" value={f.start_time} onChange={(e) => set('start_time', e.target.value)} /></label>
+        <label className="f" style={{ width: 96 }}>To<input className="in" type="time" value={f.end_time} onChange={(e) => set('end_time', e.target.value)} /></label>
+      </div>
+      <label className="f">Status</label>
+      <Seg value={f.status} onChange={(v) => set('status', v)} options={[['idea', 'Idea'], ['planned', 'Planned'], ['booked', 'Booked']]} label="Status" />
+      <label className="f">Who can see it</label>
+      <Seg value={f.visibility} onChange={(v) => set('visibility', v)} options={[['shared', 'Everyone'], ['busy', 'Busy only'], ['hidden', 'Just me']]} label="Visibility" />
+      <div className="s">{{ shared: 'The whole crew sees it.', busy: 'The crew sees a grey “busy” block — not what it is.', hidden: 'Only you can see it.' }[f.visibility]}</div>
+      {f.status === 'booked' && <label className="f">Booking ref<input className="in" value={f.booking_ref || ''} onChange={(e) => set('booking_ref', e.target.value)} /></label>}
+      <label className="f">Notes<textarea className="in" value={f.notes || ''} onChange={(e) => set('notes', e.target.value)} /></label>
+      <button className="btn block" disabled={!f.title.trim()} onClick={save}>{item ? 'Save' : 'Add'}</button>
+      {item && (
+        <button className="btn ghost block" onClick={() => { if (confirm('Remove this from the trip?')) { remove('items', item.id); onClose(); } }}>Remove</button>
+      )}
+    </Sheet>
+  );
+}
