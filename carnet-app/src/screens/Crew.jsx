@@ -35,13 +35,16 @@ export default function Crew({ t, me, onClose, go }) {
       setMsg(`Couldn’t email (${e.message}). You can send the link yourself instead.`);
     }
   }
+  const isTab = trip.kind === 'tab';
   function addPerson() {
-    const e = email.trim().toLowerCase();
+    let e = email.trim().toLowerCase();
+    if (!e && isTab && name.trim()) e = `guest-${uid().slice(0, 8)}@guest.carnet`; // someone without the app
     if (!e.includes('@')) return;
     const m = { id: uid(), trip_id: trip.id, email: e, name: name.trim() || e.split('@')[0], role: 'member' };
     upsert('trip_members', m);
     setName(''); setEmail('');
-    if (navigator.onLine) sendInvite(m);
+    if (e.endsWith('@guest.carnet')) setMsg(`${m.name} added — they don’t need the app.`);
+    else if (navigator.onLine) sendInvite(m);
     else setMsg('Added. The invite email goes when you’re back online — tap Resend.');
   }
   function shareLink(m) {
@@ -70,12 +73,12 @@ export default function Crew({ t, me, onClose, go }) {
                     onBlur={(e) => e.target.value.trim() && e.target.value.trim() !== m.name && upsert('trip_members', { id: m.id, name: e.target.value.trim() })}
                     style={{ border: 0, background: 'transparent', padding: 0, width: '100%', fontSize: 18 }} />
                 ) : <div className="n">{m.name || m.email}</div>}
-                <div className="s" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email.toLowerCase() === me ? (m.role === 'owner' ? 'You · organiser · tap your name to change it' : 'You · tap your name to change it') : m.role === 'owner' ? 'Organiser' : m.invited_at ? `Invited ${new Date(m.invited_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : m.email}</div>
+                <div className="s" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{m.email.endsWith('@guest.carnet') ? 'No app — you track their share' : m.email.toLowerCase() === me ? (m.role === 'owner' ? 'You · organiser · tap your name to change it' : 'You · tap your name to change it') : m.role === 'owner' ? 'Organiser' : m.invited_at ? `Invited ${new Date(m.invited_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : m.email}</div>
               </div>
               {m.email.toLowerCase() !== me && t.isAdmin && m.role !== 'owner' && (
                 <button className="btn sm ghost" style={{ padding: '0 8px' }} onClick={() => upsert('trip_members', { id: m.id, role: m.role === 'admin' ? 'member' : 'admin' })}>{m.role === 'admin' ? 'Admin ✓' : 'Make admin'}</button>
               )}
-              {m.email.toLowerCase() !== me && (
+              {m.email.toLowerCase() !== me && !m.email.endsWith('@guest.carnet') && (
                 <div className="row" style={{ gap: 6 }}>
                   <button className="btn sm ghost" onClick={() => sendInvite(m)}>{m.invited_at ? 'Resend' : 'Invite'}</button>
                   <button className="icon" style={{ width: 34, height: 34 }} aria-label={'Share link with ' + (m.name || m.email)} onClick={() => shareLink(m)}><Icon n="link" size={16} /></button>
@@ -89,11 +92,12 @@ export default function Crew({ t, me, onClose, go }) {
       <input className="in" placeholder="Name" value={name} onChange={(e) => setName(e.target.value)} />
       <div className="row">
         <input className="in" type="email" placeholder="Email" value={email} onChange={(e) => setEmail(e.target.value)} />
-        <button className="btn" disabled={!email.includes('@')} onClick={addPerson}>Add</button>
+        <button className="btn" disabled={!email.includes('@') && !(isTab && name.trim())} onClick={addPerson}>Add</button>
       </div>
-      <div className="s">They get an email with a link to join — no password, no app store. Their plans and costs sync with yours.</div>
+      <div className="s">{isTab ? 'Email is optional here — leave it blank for someone without the app; you’ll track their share for them.' : 'They get an email with a link to join — no password, no app store. Their plans and costs sync with yours.'}</div>
       {msg && <div className="card s">{msg}</div>}
 
+      {!isTab && <>
       <div className="k mute" style={{ marginTop: 6 }}>Home base · used for every travel time</div>
       {stays.map((s) => (
         <div key={s.id} className="card between">
@@ -129,20 +133,23 @@ export default function Crew({ t, me, onClose, go }) {
         {push === 'granted' && <button className="btn sm ghost" onClick={async () => { await disablePush(); setPush('default'); }}>Turn off</button>}
       </div>
 
+      </>}
+      {!isTab && <>
       <div className="k mute" style={{ marginTop: 6 }}>Schedule changes</div>
       <label className="card between" style={{ cursor: t.isAdmin ? 'pointer' : 'default' }}>
         <div className="s" style={{ flex: 1 }}>{trip.approval === false ? 'Everyone edits the schedule directly.' : 'Admins edit directly; everyone else proposes and an admin approves.'}</div>
         <input type="checkbox" disabled={!t.isAdmin} checked={trip.approval !== false} onChange={(e) => upsert('trips', { id: trip.id, approval: e.target.checked })} style={{ width: 22, height: 22, accentColor: '#1E1A16' }} aria-label="Changes need approval" />
       </label>
 
-      <div className="k mute" style={{ marginTop: 6 }}>Trip</div>
-      <div className="row">
+      </>}
+      {!isTab && <div className="k mute" style={{ marginTop: 6 }}>Trip</div>}
+      {!isTab && <div className="row">
         <label className="f grow">From<input className="in" type="date" disabled={!t.isAdmin} defaultValue={trip.start_date} onBlur={(e) => upsert('trips', { id: trip.id, start_date: e.target.value })} /></label>
         <label className="f grow">To<input className="in" type="date" disabled={!t.isAdmin} defaultValue={trip.end_date} onBlur={(e) => upsert('trips', { id: trip.id, end_date: e.target.value })} /></label>
-      </div>
+      </div>}
       <label className="f">Currency<select className="in" value={trip.currency || 'EUR'} onChange={(e) => upsert('trips', { id: trip.id, currency: e.target.value })}>{['EUR', 'GBP', 'USD', 'CHF', 'DKK', 'SEK', 'CZK', 'PLN', 'HUF'].map((c) => <option key={c}>{c}</option>)}</select></label>
       <button className="btn ghost block" onClick={() => go({ view: 'home' })}>All trips & city guides</button>
-      {isOwner && <button className="link mute" onClick={() => { if (confirm(`Delete ${trip.name} for everyone? Guides are kept.`)) { remove('trips', trip.id); go({ view: 'home' }); } }}>Delete this trip</button>}
+      {isOwner && <button className="link mute" onClick={() => { if (confirm(`Delete ${trip.name} for everyone?`)) { remove('trips', trip.id); go({ view: 'home' }); } }}>Delete this trip</button>}
     </Sheet>
   );
 }

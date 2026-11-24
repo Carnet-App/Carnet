@@ -5,6 +5,7 @@ import { fileUrl } from '../lib/files';
 import { useCityPlaces } from '../lib/hooks';
 import { CATS, cat, findVenue, guessCategory, walkMin, stayFor, todayISO, api } from '../lib/util';
 import ItemEditor from './ItemEditor';
+import Capture from './Capture';
 const MapView = lazy(() => import('./MapView'));
 
 export function PlacePhoto({ p, size = 54, style }) {
@@ -30,6 +31,7 @@ export default function Places({ t, me, city, onBack, open }) {
   const [adding, setAdding] = useState(false);
   const [toTrip, setToTrip] = useState(null);
   const [map, setMap] = useState(false);
+  const [cap, setCap] = useState(false);
   const home = t ? stayFor(t.stays, todayISO()) : null;
   const onTrip = useMemo(() => new Map((t?.items || []).filter((i) => i.place_id).map((i) => [i.place_id, i])), [t?.items]);
 
@@ -95,6 +97,12 @@ export default function Places({ t, me, city, onBack, open }) {
       {toTrip && (
         <ItemEditor t={t} me={me} preset={{ title: toTrip.name, place_id: toTrip.id, lat: toTrip.lat, lng: toTrip.lng, address: toTrip.address, category: toTrip.category, status: 'idea', day: null }} onClose={() => setToTrip(null)} />
       )}
+      {!t && (
+        <button className="fab" aria-label="Save a place from a screenshot or link" onClick={() => setCap(true)} style={{ bottom: 'calc(24px + env(safe-area-inset-bottom))' }}>
+          <Icon n="camera" color="#F3EEE6" size={24} />
+        </button>
+      )}
+      {cap && <Capture me={me} defaultCity={cityName} onClose={() => setCap(false)} />}
       {map && <Suspense fallback={null}><MapView t={t} places={all} onClose={() => setMap(false)} /></Suspense>}
     </div>
   );

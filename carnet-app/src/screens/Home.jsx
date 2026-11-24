@@ -2,13 +2,20 @@ import { useMemo, useState } from 'react';
 import { useStore, upsert, uid, resetLocal } from '../lib/store';
 import { supabase } from '../lib/supabase';
 import { Sheet, Avatar, Icon } from '../ui';
-import { dayLabel, todayISO, daysBetween, api } from '../lib/util';
+import { dayLabel, todayISO, daysBetween, api, money } from '../lib/util';
+import { balances } from '../lib/money';
+import Capture from './Capture';
 
 export default function Home({ me, go }) {
   const s = useStore();
   const [newTrip, setNewTrip] = useState(false);
   const [newCity, setNewCity] = useState(false);
-  const trips = Object.values(s.trips).sort((a, b) => (b.start_date || '').localeCompare(a.start_date || ''));
+  const [menu, setMenu] = useState(false);
+  const [capture, setCapture] = useState(false);
+  const [newTab, setNewTab] = useState(false);
+  const tabs = Object.values(s.trips).filter((t) => t.kind === 'tab').sort((a, b) => (b.created_at || b.start_date || '').localeCompare(a.created_at || a.start_date || ''));
+  const myNet = (id) => balances(Object.values(s.expenses).filter((e) => e.trip_id === id), Object.values(s.settlements).filter((x) => x.trip_id === id))[me] || 0;
+  const trips = Object.values(s.trips).filter((t) => t.kind !== 'tab').sort((a, b) => (b.start_date || '').localeCompare(a.start_date || ''));
   const today = todayISO();
   const now = trips.find((t) => t.start_date <= today && (t.end_date || t.start_date) >= today);
   const next = trips.filter((t) => t.start_date > today).sort((a, b) => a.start_date.localeCompare(b.start_date))[0];
@@ -25,7 +32,7 @@ export default function Home({ me, go }) {
         if (p.source === 'instagram') m[k].ig++;
       }
     }
-    for (const t of trips) if (!m[t.city]) m[t.city] = { city: t.city, n: 0, visited: 0, ig: 0 };
+    for (const t of trips) if (t.city && !m[t.city]) m[t.city] = { city: t.city, n: 0, visited: 0, ig: 0 };
     return Object.values(m).sort((a, b) => b.n - a.n);
   }, [s.places, s.trips]);
 
@@ -66,6 +73,21 @@ export default function Home({ me, go }) {
       </div>
 
       <div className="between" style={{ marginTop: 8 }}>
+        <span className="k amber">Tabs · splits outside a trip</span>
+        <button className="link amber" onClick={() => setNewTab(true)}>+ Split a bill</button>
+      </div>
+      {tabs.map((t) => {
+        const n = myNet(t.id);
+        return (
+          <button key={t.id} className="card between" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => go({ view: 'trip', tripId: t.id, tab: 'money' })}>
+            <div><div className="n">{t.name}</div><div className="s">{membersOf(t.id).length} people</div></div>
+            <div style={{ textAlign: 'right', font: '600 13px var(--sans)', color: n > 0.004 ? '#24563F' : n < -0.004 ? '#A8472A' : 'var(--mute)' }}>{n > 0.004 ? `owed ${money(n, t.currency)}` : n < -0.004 ? `you owe ${money(-n, t.currency)}` : 'square'}</div>
+          </button>
+        );
+      })}
+      {!tabs.length && <div className="s">Dinner, a night out, flat bills — split anything, with or without a trip. Friends don’t need the app.</div>}
+
+      <div className="between" style={{ marginTop: 8 }}>
         <span className="k amber">City guides · yours, kept forever</span>
         <button className="link amber" onClick={() => setNewCity(true)}>+ City</button>
       </div>
@@ -87,6 +109,24 @@ export default function Home({ me, go }) {
         </div>
       )}
 
+      <button className="fab" aria-label="Capture or split" onClick={() => setMenu(true)} style={{ bottom: 'calc(24px + env(safe-area-inset-bottom))' }}>
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#F3EEE6" strokeWidth="2" aria-hidden="true"><path d="M12 5v14M5 12h14" /></svg>
+      </button>
+      {menu && (
+        <Sheet onClose={() => setMenu(false)}>
+          <button className="card dark between" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => { setMenu(false); setCapture(true); }}>
+            <span><div className="n" style={{ color: '#F3EEE6' }}>Save a place</div><div className="s" style={{ color: '#B7AC9C' }}>Screenshot, reel or link → a city guide</div></span><Icon n="camera" color="#E2B36A" />
+          </button>
+          <button className="card between" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => { setMenu(false); setNewTab(true); }}>
+            <span><div className="n">Split a bill</div><div className="s">Start a tab — no trip needed</div></span><Icon n="receipt" />
+          </button>
+          <button className="card between" style={{ cursor: 'pointer', textAlign: 'left' }} onClick={() => { setMenu(false); setNewTrip(true); }}>
+            <span><div className="n">New trip</div><div className="s">Dates, crew, schedule</div></span><Icon n="plan" />
+          </button>
+        </Sheet>
+      )}
+      {capture && <Capture me={me} onClose={() => setCapture(false)} />}
+      {newTab && <NewTab me={me} pastPeople={pastPeople(s, me)} onClose={() => setNewTab(false)} onDone={(id) => go({ view: 'trip', tripId: id, tab: 'money' })} />}
       {newTrip && <NewTrip me={me} onClose={() => setNewTrip(false)} onDone={(id) => go({ view: 'trip', tripId: id, tab: 'today' })} />}
       {newCity && <NewCity onClose={() => setNewCity(false)} go={go} />}
     </div>
@@ -164,6 +204,55 @@ function NewCity({ onClose, go }) {
     <Sheet title="New city guide" onClose={onClose}>
       <CitySearch onPick={(c) => c && go({ view: 'guide', city: c.city })} onText={setTxt} />
       <button className="btn block" disabled={!txt.trim()} onClick={() => go({ view: 'guide', city: txt.trim().replace(/^./, (x) => x.toUpperCase()) })}>Open guide</button>
+    </Sheet>
+  );
+}
+
+function pastPeople(s, me) {
+  const m = {};
+  for (const x of Object.values(s.trip_members)) {
+    const e = x.email?.toLowerCase();
+    if (e && e !== me && !e.endsWith('@guest.carnet')) m[e] = x.name || e.split('@')[0];
+  }
+  return Object.entries(m).map(([email, name]) => ({ email, name }));
+}
+
+function NewTab({ me, pastPeople, onClose, onDone }) {
+  const [name, setName] = useState('');
+  const [picked, setPicked] = useState([]);
+  const [guests, setGuests] = useState([]);
+  const [g, setG] = useState('');
+  const count = 1 + picked.length + guests.length;
+  function create() {
+    const id = uid();
+    upsert('trips', { id, kind: 'tab', name: name.trim() || 'Split', city: null, start_date: todayISO(), end_date: todayISO(), approval: false });
+    upsert('trip_members', { id: uid(), trip_id: id, email: me, name: me.split('@')[0], role: 'owner' });
+    for (const p of pastPeople.filter((p) => picked.includes(p.email))) upsert('trip_members', { id: uid(), trip_id: id, email: p.email, name: p.name, role: 'member' });
+    for (const n of guests) upsert('trip_members', { id: uid(), trip_id: id, email: `guest-${uid().slice(0, 8)}@guest.carnet`, name: n, role: 'member' });
+    onDone(id);
+  }
+  return (
+    <Sheet title="Split a bill" onClose={onClose}>
+      <label className="f">What’s it for<input className="in" value={name} onChange={(e) => setName(e.target.value)} placeholder="Dinner with Sam, Friday out, flat bills…" /></label>
+      {pastPeople.length > 0 && (
+        <>
+          <label className="f">Who’s in</label>
+          <div className="chips">
+            {pastPeople.map((p) => {
+              const on = picked.includes(p.email);
+              return <button key={p.email} className={'chip' + (on ? ' on' : '')} onClick={() => setPicked(on ? picked.filter((x) => x !== p.email) : [...picked, p.email])}>{p.name}</button>;
+            })}
+          </div>
+        </>
+      )}
+      <label className="f">Add someone without the app</label>
+      <div className="row">
+        <input className="in" value={g} onChange={(e) => setG(e.target.value)} placeholder="Name" onKeyDown={(e) => e.key === 'Enter' && g.trim() && (setGuests([...guests, g.trim()]), setG(''))} />
+        <button className="btn" disabled={!g.trim()} onClick={() => { setGuests([...guests, g.trim()]); setG(''); }}>Add</button>
+      </div>
+      {guests.length > 0 && <div className="chips">{guests.map((n, i) => <button key={i} className="chip on" onClick={() => setGuests(guests.filter((_, j) => j !== i))}>{n} ×</button>)}</div>}
+      <div className="s">{count} {count === 1 ? 'person (add more, or anyone later)' : 'people'} · works offline, settles up the same way as trips.</div>
+      <button className="btn block" onClick={create}>Start the tab</button>
     </Sheet>
   );
 }

@@ -1,10 +1,14 @@
--- Carnet fix 2: trip admins, proposals, push notifications (includes fix 1).
+-- Carnet fix 2: trip admins, proposals, push notifications, tabs (includes fix 1).
 -- Paste into Supabase → SQL Editor → Run (once). Safe to run again.
 
 -- Fix 1: a new trip must be visible to its creator in the same moment it's created.
 drop policy if exists trips_select on public.trips;
 create policy trips_select on public.trips for select to authenticated
   using (owner = auth.uid() or public.is_member(id));
+
+-- Tabs: one-off splits outside a trip (no city, no schedule).
+alter table public.trips add column if not exists kind text not null default 'trip';
+alter table public.trips alter column city drop not null;
 
 -- ── Roles & the approval switch ────────────────────────────────────────
 alter table public.trips add column if not exists approval boolean not null default true;

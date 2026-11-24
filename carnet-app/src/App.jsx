@@ -63,6 +63,17 @@ function TripShell({ route, go, me, setRoute }) {
   const open = (overlay) => setRoute((x) => ({ ...x, overlay }));
   const close = () => setRoute((x) => ({ ...x, overlay: null }));
   const props = { t, me, go, open, route };
+  if (t.trip.kind === 'tab') {
+    // A one-off tab: just the money, no schedule.
+    return (
+      <>
+        <button className="link" style={{ position: 'absolute', top: 'calc(env(safe-area-inset-top) + 2px)', left: 20, textDecoration: 'none', zIndex: 5 }} onClick={() => go({ view: 'home' })}>‹ Carnet</button>
+        <div style={{ paddingTop: 20 }}><Money {...props} /></div>
+        <button className="btn sm ghost" style={{ position: 'fixed', right: 'max(20px, calc(50% - 260px))', bottom: 'calc(24px + env(safe-area-inset-bottom))', background: 'var(--card)' }} onClick={() => open({ name: 'crew' })}>People</button>
+        {route.overlay?.name === 'crew' && <Crew t={t} me={me} onClose={close} go={go} />}
+      </>
+    );
+  }
   const Tab = { today: Today, plan: Plan, places: Places, wallet: Wallet, money: Money }[route.tab] || Today;
   return (
     <>

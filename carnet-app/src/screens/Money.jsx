@@ -117,7 +117,7 @@ function CostSheet({ t, me, e, onClose }) {
           <div className="s">{money(customSum)} of {money(amt)} assigned</div>
         </div>
       )}
-      <button className="btn block" disabled={!ok} onClick={save}>{e ? 'Save' : 'Add to trip expenses'}</button>
+      <button className="btn block" disabled={!ok} onClick={save}>{e ? 'Save' : 'Add cost'}</button>
       {e && <button className="btn ghost block" onClick={() => { if (confirm('Delete this cost?')) { remove('expenses', e.id); onClose(); } }}>Delete</button>}
     </Sheet>
   );
