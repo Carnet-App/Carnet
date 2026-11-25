@@ -199,7 +199,9 @@ function ReceiptSplit({ t, me, onClose }) {
       setLines(start.lines.map((l) => ({ ...l, who: [...emails] })));
       setAdjustments(start.adjustments);
       setTip(start.tipPct);
-      setTitle(res.text.split('\n').map((s) => s.trim()).find((s) => /[A-Za-z]{3}/.test(s) && s.length < 40) || 'Dinner');
+      // The shop's name: the first real-looking line, without reader debris around it ("i  CAFE JACKS").
+      const clean = (x) => x.replace(/^(\S{1,2}\s+)+/, '').replace(/(\s+\S{1,3})+$/, '').trim();
+      setTitle(res.text.split('\n').map(clean).find((x) => /\p{L}{4,}/u.test(x) && x.length < 40 && (x.match(/\p{L}/gu) || []).length / x.replace(/\s/g, '').length > 0.7) || 'Dinner');
       setBusy('');
     } catch (e) { setBusy('Couldn’t read that: ' + e.message); }
   }
@@ -305,6 +307,7 @@ function ReceiptSplit({ t, me, onClose }) {
             </div>
           </div>
           {r.validation === 'difference' && <div className="card dashed s">The receipt’s total says {money(r.printedTotal, cur)}, the lines add up to {money(r.sum, cur)}. Check for a missed or misread line.</div>}
+          {r.validation && !r.lines?.length && <div className="card dashed s">Couldn’t pick out any prices. A straight, flat photo of the paper receipt (not a screenshot) works best — or add the lines yourself.</div>}
           {r.validation === 'unverified' && r.lines?.length > 0 && <div className="card dashed s">No total found on the receipt, so these lines couldn’t be checked against it. Worth a quick look.</div>}
           <div className="card dark col">
             <div className="between"><span className="k" style={{ color: 'var(--gold)' }}>Total {money(shown(result.total), cur)}</span>{tip ? <span className="s" style={{ color: '#B7AC9C' }}>incl. {tip}% tip</span> : null}</div>
