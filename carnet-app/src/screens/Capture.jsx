@@ -93,6 +93,18 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     const venues = [];
     for (const c of cands.slice(0, 6)) {
       let matches = [];
+      if (navigator.onLine && c.address) {
+        // The screenshot gave us the address: place it there, and use the name search
+        // only to pick up the venue's own map entry if it's at that address.
+        const [spot] = (await api('/api/geo', { q: c.address, lat: near?.lat, lng: near?.lng }).catch(() => ({}))).results || [];
+        const named = await findVenue(`${c.name} ${city}`.trim(), spot || near, c.type).catch(() => []);
+        const there = spot ? named.filter((m) => distM(spot, m) < 250 && similarity(c.name, m.name) >= 0.6) : [];
+        const opt = there[0] || (spot && { ...spot, name: c.name, address: c.address, osm_value: null });
+        if (opt) {
+          venues.push({ cand: c, options: [{ ...opt, sim: 1 }], pick: 0, keep: true, sure: true });
+          continue;
+        }
+      }
       if (navigator.onLine) matches = await findVenue(`${c.name} ${area || ''} ${city}`.trim(), near, c.type).catch(() => []);
       const scored = matches
         .map((m) => ({ ...m, sim: similarity(c.name, m.name), far: near && distM(near, m) > 25000 }))
@@ -237,7 +249,7 @@ function VenueReview({ t, r, setR, onDone }) {
       const id = uid();
       upsert('places', {
         id, city, name: m?.name || v.cand.name, category: guessCategory(m?.osm_value, (m?.name || '') + ' ' + v.cand.name),
-        address: m?.address || null, lat: m?.lat ?? null, lng: m?.lng ?? null,
+        address: m?.address || v.cand.address || null, lat: m?.lat ?? null, lng: m?.lng ?? null,
         source: r.source, source_detail: r.handle ? '@' + r.handle : null, link: r.link || null,
         photo_path: photo, photo_url: m?.google_id ? `/api/gphoto?id=${encodeURIComponent(m.google_id)}` : null,
         collection: collection || null, needs_check: !m,

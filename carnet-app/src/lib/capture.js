@@ -189,6 +189,22 @@ export function venueCandidates(text, lines = null, height = 1) {
   const card = out.filter((o) => o.why === 'Google Maps place');
   if (card.length) return card;
 
+  // "medowski.k Rojo, 8 Rue de Beauce, 75003 Paris": a name followed by a street address
+  // (Instagram location tags, captions, listings). The strongest signal there is.
+  const STREET = '(?:rue|bd|boulevard|avenue|av\\.?|place|pl\\.?|quai|passage|impasse|cit[ée]|all[ée]e|chemin|square|cours|villa|faubourg|fbg|route|straße|strasse|str\\.?|calle|carrer|via|street|st\\.?|road|rd\\.?|lane|ave)';
+  const addrRe = new RegExp(`^(?:@?([a-z0-9._]{3,30})\\s+)?(.+?)\\s*[,–—-]\\s*(\\d{1,4}\\s*(?:bis|ter)?\\s*,?\\s*${STREET}\\b.*)$`, 'iu');
+  for (const l of all) {
+    const m = l.match(addrRe);
+    if (!m) continue;
+    // Handles are lowercase: "Bar Calders, 25 Carrer…" keeps "Bar".
+    const name = (m[1] && /[A-Z]/.test(m[1]) ? `${m[1]} ${m[2]}` : m[2]).trim();
+    add(name, 'name + address', 15);
+    const hit = out.find((o) => o.why === 'name + address' && !o.address);
+    if (hit) hit.address = m[3].replace(/\s+/g, ' ').trim();
+  }
+  const addressed = out.filter((o) => o.why === 'name + address');
+  if (addressed.length) return addressed;
+
   for (const l of all) {
     const pin = l.match(/(?:📍|📌|location:|address:|adresse\s*:)\s*(.+)/i);
     if (pin) add(pin[1].split(/[,–—-]/)[0], 'pin / location', 5);
@@ -204,7 +220,7 @@ export function venueCandidates(text, lines = null, height = 1) {
     }
   // The biggest text on screen (below the status bar) is usually the name.
   if (lines?.length) {
-    const body = lines.filter((l) => l.y > height * 0.06 && l.text && l.conf > 50);
+    const body = lines.filter((l) => l.y > height * 0.06 && l.text && l.conf > 75); // photos make low-confidence 'text'
     const big = [...body].sort((a, b) => b.h - a.h).slice(0, 3);
     big.forEach((l, i) => add(l.text, 'largest text', 4 - i));
   }
