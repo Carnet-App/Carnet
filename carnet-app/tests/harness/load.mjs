@@ -58,5 +58,5 @@ export function versions(model) {
   const core = (process.env.CARNET_OCR_CORE || 'app') === 'app'
     ? pj('node_modules/tesseract.js-core/package.json')
     : pj('node_modules/tesseract.js/node_modules/tesseract.js-core/package.json');
-  return { worker: pj('node_modules/tesseract.js/package.json'), core, model: model === 'app' ? 'app (@tesseract.js-data 4.0.0)' : `@tesseract.js-data ${model}`, simd: 'LSTM-only SIMD build, as Safari loads' };
+  return { worker: pj('node_modules/tesseract.js/package.json'), core, model: model === 'app' ? 'app (@tesseract.js-data 4.0.0_best_int)' : `@tesseract.js-data ${model}`, simd: 'LSTM-only SIMD build, as Safari loads' };
 }
