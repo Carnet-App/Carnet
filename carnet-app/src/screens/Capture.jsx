@@ -2,10 +2,11 @@ import { useMemo, useRef, useState } from 'react';
 import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
 import { readImage, readVideo, placeCard, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
+import { getMe } from '../lib/me';
 import { storeFile } from '../lib/files';
 import { saveInspection, compactLines } from '../lib/inspect';
 import InspectPanel from './InspectPanel';
-import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS, norm } from '../lib/util';
+import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS, norm, nameOf } from '../lib/util';
 import { nameMatch, rankResults, squashName } from '../lib/match';
 import ItemEditor from './ItemEditor';
 import { AddPlace } from './Places';
@@ -401,7 +402,11 @@ function VenueReview({ t, r, setR, onDone }) {
       const note = v.cand.note ? v.cand.note.slice(0, 600) : null;
       const ex = existingFor(v, city, places);
       let id;
-      if (ex) {
+      if (ex && ex.owner && getMe().id && ex.owner !== getMe().id) {
+        // Someone else's place (seen here because it's on the trip): link to it, don't edit it —
+        // only its owner can, and the server would refuse.
+        id = ex.id;
+      } else if (ex) {
         // Already saved: fill in what it's missing, keep what's there.
         id = ex.id;
         upsert('places', {
@@ -422,7 +427,9 @@ function VenueReview({ t, r, setR, onDone }) {
           notes: note, collection: collection || null, needs_check: !m || !!m.addressOnly,
         });
       }
-      if (t && alsoTrip && city.toLowerCase() === t.trip.city?.toLowerCase() && !onTrip.has(id))
+      // Already on the trip under the same name (typed in, or from someone else's import)? Not twice.
+      const sameOnTrip = (t?.items || []).some((i) => i.title && (norm(i.title) === norm(name) || similarity(i.title, name) >= 0.85));
+      if (t && alsoTrip && city.toLowerCase() === t.trip.city?.toLowerCase() && !onTrip.has(id) && !sameOnTrip)
         upsert('items', { id: uid(), trip_id: t.trip.id, place_id: id, title: name, category: v.cat || guessCategory(m?.osm_value, name), status: 'idea', visibility: 'shared', lat: m?.lat ?? null, lng: m?.lng ?? null, address: m?.address || null });
     }
     onDone();
@@ -454,7 +461,14 @@ function VenueReview({ t, r, setR, onDone }) {
                           ? v.cand.hint ? `Somewhere near ${v.cand.hint}` : 'What’s it called?'
                           : v.located === 'address' && v.pick === 0 ? `At the address in the post · ${v.options[0].address || ''}` : v.pick != null ? `${v.sure ? 'Matched' : 'You picked'} · ${v.options[v.pick].address || ''}` : v.unchecked ? 'Not checked yet — no signal' : v.options.length ? 'Not sure — is it one of these?' : 'No match on the map — keep as a note?'}
                       </div>
-                      {ex && <div className="s" style={{ color: 'var(--amber, #8A5A14)', marginTop: 2 }}>Already in your {city} guide — this adds to it</div>}
+                      {(() => {
+                        const nm = v.pick != null ? v.options[v.pick].name : v.cand.name;
+                        const onTripAs = nm && (t?.items || []).find((i) => i.title && (norm(i.title) === norm(nm) || similarity(i.title, nm) >= 0.85));
+                        const theirs = ex && ex.owner && getMe().id && ex.owner !== getMe().id;
+                        const who = onTripAs?.created_by_email && onTripAs.created_by_email !== getMe().email ? nameOf(t.members, onTripAs.created_by_email) : null;
+                        const msg = onTripAs ? `Already on the trip${who ? `, added by ${who}` : ''} — won’t be added twice` : theirs ? 'Already on the trip — this links to it' : ex ? `Already in your ${city} guide — this adds to it` : null;
+                        return msg && <div className="s" style={{ color: 'var(--amber, #8A5A14)', marginTop: 2 }}>{msg}</div>;
+                      })()}
                     </div>
                   </label>
                 </div>

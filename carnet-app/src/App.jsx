@@ -14,6 +14,7 @@ import Crew from './screens/Crew';
 const MapView = lazy(() => import('./screens/MapView'));
 import { useTrip } from './lib/hooks';
 import { recoverOwnProposals } from './lib/proposals';
+import { setMe } from './lib/me';
 
 const saved = (() => { try { return JSON.parse(localStorage.getItem('carnet-route')) || {}; } catch { return {}; } })();
 
@@ -37,6 +38,7 @@ export default function App() {
   }, [route]);
 
   const go = (r) => setRoute((x) => ({ ...x, overlay: null, ...r }));
+  setMe(session);
   const me = session?.user?.email?.toLowerCase();
 
   if (session === undefined) return <div className="app" />;

@@ -1,9 +1,10 @@
 import { useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { Icon, Sheet, CatTag, StatusPill } from '../ui';
-import { upsert, remove, uid } from '../lib/store';
+import { upsert, remove, uid, useStore } from '../lib/store';
+import { getMe } from '../lib/me';
 import { fileUrl } from '../lib/files';
 import { useCityPlaces } from '../lib/hooks';
-import { CATS, cat, findVenue, guessCategory, walkMin, stayFor, todayISO, api } from '../lib/util';
+import { CATS, cat, findVenue, guessCategory, walkMin, stayFor, todayISO, api, nameOf } from '../lib/util';
 import ItemEditor from './ItemEditor';
 import Capture from './Capture';
 const MapView = lazy(() => import('./MapView'));
@@ -200,7 +201,24 @@ export function PlaceDetail({ p: initial, onClose }) {
       </label>
       {msg && <div className="s">{msg}</div>}
       {p.lat != null && <a className="btn ghost block" href={`https://maps.apple.com/?daddr=${p.lat},${p.lng}&dirflg=w`} target="_blank" rel="noreferrer">Directions in Maps</a>}
+      <AddedBy p={p} />
       <button className="link mute" onClick={() => { if (confirm('Delete from your guide?')) { remove('places', p.id); onClose(); } }}>Delete from guide</button>
     </Sheet>
   );
+}
+
+// Who added a place, and from what. Places you see but didn't add come from the trip, where the
+// plan pointing at it says who put it there.
+const SOURCE = { instagram: 'Instagram', screenshot: 'a screenshot', google: 'Google Maps', osm: 'the map', web: 'a website', friend: 'a friend', manual: 'typed in', tiktok: 'TikTok' };
+function AddedBy({ p }) {
+  const items = useStore((s) => s.items);
+  const members = useStore((s) => s.trip_members);
+  const me = getMe();
+  const mine = !p.owner || p.owner === me.id;
+  const via = Object.values(items || {}).find((i) => i.place_id === p.id && i.created_by_email);
+  const email = mine ? me.email : via?.created_by_email;
+  const who = mine ? 'you' : email ? nameOf(Object.values(members || {}), email) : 'someone on the trip';
+  const when = p.created_at ? new Date(p.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : null;
+  const from = SOURCE[p.source] || null;
+  return <div className="s" style={{ textAlign: 'center' }}>Added by {who}{when ? ` · ${when}` : ''}{from ? ` · from ${from}` : ''}</div>;
 }

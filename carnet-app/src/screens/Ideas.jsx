@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { fileUrl } from '../lib/files';
 import { Seg } from '../ui';
 import { PlacePhoto } from './Places';
-import { cat, areaOf, slotOf, SLOTS, walkMin, distM, stayFor, useLocation, dayLabel } from '../lib/util';
+import { cat, areaOf, slotOf, SLOTS, walkMin, distM, stayFor, useLocation, dayLabel, nameOf } from '../lib/util';
 
 const SORTS = [['when', 'Time of day'], ['near', 'Nearest'], ['area', 'Area']];
 const saved = () => { try { return localStorage.getItem('carnet.ideasSort') || 'when'; } catch { return 'when'; } };
@@ -52,7 +52,7 @@ export default function Ideas({ t, ideas, day, onOpen }) {
             </div>
           ) : <div className="s">{g.label}</div>}
           <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
-            {g.rows.map((r, i) => <Row key={r.it.id} r={r} first={!i} day={day} sort={sort} onOpen={onOpen} />)}
+            {g.rows.map((r, i) => <Row key={r.it.id} r={r} first={!i} day={day} sort={sort} onOpen={onOpen} t={t} />)}
           </div>
         </div>
       ))}
@@ -60,10 +60,11 @@ export default function Ideas({ t, ideas, day, onOpen }) {
   );
 }
 
-function Row({ r, first, day, sort, onOpen }) {
+function Row({ r, first, day, sort, onOpen, t }) {
   const { it, p, walk, area } = r;
   const c = cat(it.category);
-  const meta = [c.label, sort !== 'area' && area, walk != null && (walk > 45 ? `${(walk * 80 / 1300).toFixed(1)} km away` : `${walk} min walk`)].filter(Boolean).join(' · ');
+  const by = it.created_by_email && t.me && it.created_by_email.toLowerCase() !== t.me ? nameOf(t.members, it.created_by_email) : null;
+  const meta = [c.label, sort !== 'area' && area, walk != null && (walk > 45 ? `${(walk * 80 / 1300).toFixed(1)} km away` : `${walk} min walk`), by && `from ${by}`].filter(Boolean).join(' · ');
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderTop: first ? 0 : '1px solid var(--line)' }}>
       <button onClick={() => onOpen(it)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, background: 'none', border: 0, padding: 0, textAlign: 'left', cursor: 'pointer', color: 'inherit' }}>
