@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
-import { readImage, readVideo, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
+import { readImage, readVideo, mapsSheet, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { saveInspection, compactLines } from '../lib/inspect';
 import InspectPanel from './InspectPanel';
@@ -40,6 +40,12 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         setProgress(isVideo ? 'Watching the recording for names on screen…' : `Reading the ${/pdf/i.test(file.type) || /\.pdf$/i.test(file.name) ? 'PDF' : 'image'}${of}…`);
         const r = isVideo ? await readVideo(file, (p) => setProgress(`Watching the recording… ${Math.round(p * 100)}%`)) : await readImage(file);
         const thumb = r.canvas ? await thumbBlob(r.canvas) : null;
+        // A place's card in a map app: the name sits above its rating, and that's the whole answer.
+        const sheet = !isVideo ? mapsSheet(r.text) : null;
+        if (sheet) {
+          pages.push({ ...r, thumb, photo: thumb, sheet, first: [{ name: sheet.name, weight: 20, why: 'map app · place card' }], pic: [], overlay: '', overlayLines: [], isVideo, ms: performance.now() - t0, file: file.name, source: 'google' });
+          continue;
+        }
         // A post screenshot: caption first, words on the photo second, and the photo itself
         // (not the whole screen) as the place's picture.
         const post = !isVideo && !r.pdf && r.canvas ? postLayout(r.lines, r.height) : null;
@@ -124,11 +130,11 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     // Candidates from every page, each remembering the page's photo and what it said.
     const found = [];
     for (const pg of pages) {
-      const cands = tieredCandidates(pg.first || [], pg.pic || [], pg.text || '');
+      const cands = pg.sheet ? pg.first : tieredCandidates(pg.first || [], pg.pic || [], pg.text || '');
       const facts = captionFacts(pg.post?.caption || '');
       const hintText = [pg.post?.caption, pg.overlay].filter(Boolean).join('\n');
       const area = areaHint(hintText || pg.text || '');
-      const kind = typeHint([pg.post ? pg.post.caption : pg.text, pg.overlay].filter(Boolean).join('\n'));
+      const kind = pg.sheet?.category ? typeHint(pg.sheet.category) || pg.sheet.category.toLowerCase() : typeHint([pg.post ? pg.post.caption : pg.text, pg.overlay].filter(Boolean).join('\n'));
       const fromPic = new Map((pg.pic || []).filter((c) => c.name).map((c) => [c.name.toLowerCase(), c]));
       for (const c of cands.slice(0, 8)) {
         const p = fromPic.get(c.name.toLowerCase());

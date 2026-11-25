@@ -4,6 +4,11 @@
 export async function extractTravel(C, canvas) {
   const t0 = Date.now();
   const r = await C.readText(canvas);
+  const sheet = C.mapsSheet(r.text);
+  if (sheet) {
+    const cands = [{ name: sheet.name, weight: 20, why: 'map app · place card' }];
+    return { ms: Date.now() - t0, text: r.text, overlay: '', lines: r.lines, post: false, cands, shown: cands, nameless: 0 };
+  }
   const post = C.postLayout(r.lines, r.height);
   const first = C.notTheAccount(r.lines?.length ? C.firstLine({ post, lines: r.lines, height: r.height, text: r.text }) : C.venueCandidates(r.text), post?.handle);
   let overlay = { text: '', lines: [] };

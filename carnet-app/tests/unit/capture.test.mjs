@@ -92,3 +92,14 @@ test('pins read as stray symbols, "Name: address", "it\'s called", "X in the 3rd
   assert.deepEqual(top('BAR OMI\nAfter Onii-San and Ojii, Laetitia and Arthur Cohen, joined by'), [['BAR OMI', null]]);
   assert.deepEqual(top("Berlin's dreamiest hideaway\nfor rainy days"), []);
 });
+
+test('a Google Maps place card: the name above the rating, icon junk cut, wrapped names joined', async () => {
+  const { mapsSheet } = await import('../../src/lib/capture.js');
+  const card = (head) => `15:37 1. PTI\n${head}\n4.7 Xkk#k* (737) D\n@ 4 hr 15 min\n\nCocktail bar - €10-20 - &\nOpen : Closes 01:00\n\nA Start | Reserve\n\nOverview Menu Reviews Photos Updates`;
+  assert.deepEqual(mapsSheet(card('Bar Nouveau ED Qh) @')), { name: 'Bar Nouveau', category: 'Cocktail bar' });
+  assert.equal(mapsSheet(card('Little Red Door oh x')).name, 'Little Red Door');
+  assert.equal(mapsSheet(card('A / ISSN ON\nCopperBay OQ td x')).name, 'CopperBay');
+  assert.equal(mapsSheet(card('Stolen Moon Cocktail O Mh x\nBar')).name, 'Stolen Moon Cocktail Bar');
+  assert.equal(mapsSheet('Le Syndicat A b x\n45 XkX*x (1,740) D\n341 km\nCocktail bar - €10-20\nOverview Menu Reviews').name, 'Le Syndicat');
+  assert.equal(mapsSheet('Some caption about a bar\n4.7 (737)\nliked by friends'), null, 'needs the map app\'s tabs');
+});

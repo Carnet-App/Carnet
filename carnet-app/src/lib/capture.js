@@ -947,3 +947,40 @@ export function areaHint(text) {
   const m = text.match(/\b(?:in|à|dans)\s+((?:le|la|les|the)\s+)?([A-ZÀ-Ý][\p{L}'-]+(?:\s+[A-ZÀ-Ý][\p{L}'-]+)?)/u);
   return m && !/^(Paris|Berlin|Barcelona|London|Instagram)$/i.test(m[2]) ? `${m[1] || ''}${m[2]}`.trim() : null;
 }
+
+// ── Map apps: a place's own card (Google Maps) ───────────────────────
+// The card reads: name · "4.7 ★★★★★ (737)" · travel time · "Cocktail bar · €10–20" · Open/Closed,
+// then Directions / Overview / Reviews. The name is the line above the rating; the bookmark,
+// share and close icons to its right come out of OCR as short junk ("ED Qh) @", "oh x"), so trailing
+// tokens that aren't words are cut. A long name wraps onto a second line ("Stolen Moon Cocktail / Bar").
+const RATING = /^\s*\d(?:\s?[.,]\s?\d|\d)?\s.{0,24}\(\s*\d[\d,.\s]*\)/;
+const junkTail = (s) => {
+  const w = s.trim().split(/\s+/);
+  while (w.length > 1) {
+    const last = w[w.length - 1];
+    if (last.length <= 2 || /[^\p{L}\p{N}'’&.-]/u.test(last) || (/^[a-z]/.test(last) && /^\p{Lu}/u.test(w[0]) && last.length <= 3)) w.pop();
+    else break;
+  }
+  return w.join(' ');
+};
+export function mapsSheet(text = '') {
+  if (!/\b(directions|overview|reviews)\b/i.test(text)) return null;
+  const L = text.split('\n').map((s) => s.trim());
+  const i = L.findIndex((l, k) => k > 0 && RATING.test(l));
+  if (i < 1) return null;
+  // The type line ("Cocktail bar · €10–20", "Restaurant · ££") within the next few lines.
+  const typeLine = L.slice(i + 1, i + 5).find((l) => /^[\p{L} &'’-]{3,40}\s*[-·•:]\s*(?:[€£$]|\d)/u.test(l) || /^[\p{L} &'’-]{3,40}$/u.test(l) && !/\b(open|closed|closes|opens|hr|min|km)\b/i.test(l));
+  const category = typeLine ? typeLine.split(/\s*[-·•:]\s*/)[0].trim() : null;
+  let k = i - 1;
+  while (k > 0 && !L[k]) k--;
+  let name = junkTail(L[k]);
+  // A wrapped name: a lone word under a heading line ("Bar" under "Stolen Moon Cocktail"). The icons
+  // sit beside the first line of the name, so that's the line that had junk cut, not this one.
+  if (name === L[k] && /^\p{Lu}[\p{L}'’&.-]{1,14}$/u.test(name) && k > 0 && L[k - 1]) {
+    const above = junkTail(L[k - 1]);
+    const words = above.split(/\s+/);
+    if (above !== L[k - 1] && /^\p{Lu}/u.test(above) && words.length >= 2 && words.every((w) => /^\p{L}[\p{L}'’&.-]+$/u.test(w))) name = `${above} ${name}`;
+  }
+  if (!name || name.length < 2 || !/\p{L}{2}/u.test(name)) return null;
+  return { name, category };
+}
