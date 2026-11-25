@@ -140,7 +140,10 @@ export function postLayout(lines, height) {
 }
 
 // Words laid over a photo are usually white or near-white: keep only those pixels, enlarged,
-// so the reader isn't looking for letters in the food.
+// so the reader isn't looking for letters in the food. Two passes:
+//  - the whole picture, for paragraphs (quotes, captions burnt into the image);
+//  - each separate line of text on its own, which finds a lone big word ("VIRAGE") that the
+//    paragraph pass skips.
 export async function readOverlay(canvas, box) {
   const sh = box.y1 - box.y0;
   const s = Math.min(2, 2000 / canvas.width);
@@ -151,14 +154,141 @@ export async function readOverlay(canvas, box) {
   g.drawImage(canvas, 0, box.y0, canvas.width, sh, 0, 0, c.width, c.height);
   const img = g.getImageData(0, 0, c.width, c.height);
   const d = img.data;
+  const rows = new Uint32Array(c.height);
   for (let i = 0; i < d.length; i += 4) {
     const lo = Math.min(d[i], d[i + 1], d[i + 2]), hi = Math.max(d[i], d[i + 1], d[i + 2]);
     const ink = lo > 205 && hi - lo < 40;
     d[i] = d[i + 1] = d[i + 2] = ink ? 0 : 255;
+    if (ink) rows[(i / 4 / c.width) | 0]++;
   }
   g.putImageData(img, 0, 0);
-  const { lines } = await readText(c);
-  return lines.filter((l) => l.conf > 75 && /\p{L}{3,}/u.test(l.text)).map((l) => l.text.replace(/^[^\p{L}\p{N}@#📍]+/u, '')).join('\n');
+  const full = (await readText(c)).lines.filter((l) => l.conf > 60 && l.text);
+
+  // Bands of ink one text-line tall that the first pass didn't read confidently.
+  const bands = [];
+  const thr = Math.max(3, c.width * 0.004);
+  let start = -1, gap = 0;
+  for (let y = 0; y <= c.height; y++) {
+    if (y < c.height && rows[y] >= thr) { if (start < 0) start = y; gap = 0; }
+    else if (start >= 0 && ++gap > Math.max(4, c.height * 0.006)) {
+      const end = y - gap + 1;
+      const hgt = end - start;
+      if (hgt >= c.height * 0.012 && hgt <= c.height * 0.09) bands.push([start, end]);
+      start = -1; gap = 0;
+    }
+  }
+  const extra = [];
+  const todo = bands.filter(([a, b]) => !full.some((l) => l.conf > 80 && l.y < b && l.y + l.h > a)).slice(0, 8);
+  if (todo.length) {
+    const w = await ocrWorker();
+    await w.setParameters({ tessedit_pageseg_mode: '7' }); // one line of text
+    try {
+      for (const [a, b] of todo) {
+        const pad = 8, top = Math.max(0, a - pad), hh = Math.min(c.height, b + pad) - top;
+        const k = 64 / hh;
+        const bc = document.createElement('canvas');
+        bc.width = Math.round(c.width * k) + 40;
+        bc.height = 94;
+        const bg = bc.getContext('2d');
+        bg.fillStyle = '#fff';
+        bg.fillRect(0, 0, bc.width, bc.height);
+        bg.drawImage(c, 0, top, c.width, hh, 20, 15, c.width * k, 64);
+        const { data } = await w.recognize(bc);
+        const t = (data.text || '').trim();
+        if (data.confidence > 60 && /\p{L}{3,}/u.test(t)) extra.push({ text: t, y: a, h: b - a, conf: data.confidence, band: true });
+      }
+    } finally {
+      await w.setParameters({ tessedit_pageseg_mode: '3' });
+    }
+  }
+  const lines = [...full, ...extra].sort((x, y) => x.y - y.y).map((l) => ({ ...l, text: l.text.replace(/^[^\p{L}\p{N}@#📍“"«<€£$]+/u, '').trim() })).filter((l) => /\p{L}{2,}/u.test(l.text));
+  return { text: lines.filter((l) => l.conf > 75 || l.band).map((l) => l.text).join('\n'), lines };
+}
+
+// ── Text laid over photos: names, quotes, facts ──────────────────────
+// Editorial posts put the place's name just above a quote:
+//   Bistrot Des Tournelles
+//   "A TRADITIONAL FRENCH BISTRO NEAR PLACE DE LA BASTILLE…"
+// The name is the candidate; the quote is the note; places it mentions narrow the search.
+const QUOTE_OPEN = /^[“"«<‘']/;
+const STOP = /\b(the|a|an|of|in|for|and|near|to|on|so|with|from|that|is|are|you|your|this|it|at|by|where|when|till|until|under)\b/i;
+const sentence = (t) => t.replace(/[“”"«»_]/g, '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|[.!?]\s+)(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
+const squash = (t) => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
+
+export function overlayCandidates(lines, { handle } = {}) {
+  const me = handle ? squash(handle) : null;
+  const L = lines.map((l) => ({ ...l, text: l.text.replace(/\b\d+\s*\/\s*\d+\b/g, '').replace(/^[^\p{L}\p{N}“"«<‘'€£$]+/u, '').trim() })).filter((l) => {
+    const t = l.text;
+    if (!t) return false;
+    if (/^\d+\s*\/\s*\d+$/.test(t)) return false;                 // carousel counter "3/9"
+    if (/\b[\w-]+\.(com|fr|co|net|io|de|es|uk)\b/i.test(t)) return false; // "SERVICE95.COM"
+    if (me && squash(t) === me) return false;                     // the account's own watermark
+    return true;
+  });
+  const out = [];
+  const used = new Set();
+  // Name above a quote.
+  for (let i = 0; i < L.length; i++) {
+    if (!QUOTE_OPEN.test(L[i].text)) continue;
+    const q = [];
+    for (let j = i; j < L.length && q.length < 8; j++) {
+      q.push(L[j].text);
+      used.add(j);
+      if (/[”"»]\s*$|\.\s*$/.test(L[j].text) && j > i) break;
+    }
+    const quote = sentence(q.join(' '));
+    const above = L[i - 1];
+    let name = null;
+    if (above && !used.has(i - 1) && above.text.split(/\s+/).length <= 5 && !STOP.test(above.text) && !junk(above.text) && L[i].y - (above.y + above.h) < L[i].h * 3) {
+      name = above.text;
+      used.add(i - 1);
+    }
+    // "SUGAAR IS THAT DREAM MIX…": the quote names the place itself.
+    if (!name) name = sayIs(q.join(' '));
+    if (false) name = q.join(' ').match(/(?:^|[“"\s])([A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}(?:\s+[A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}){0,3})\s+(?:IS|1S|ES|ARE|HAS)\s/u)?.[1] || null;
+    out.push({ name: name || '', why: name ? 'on the photo · name above a quote' : 'on the photo · quote', weight: name ? 8 : 4, note: quote, hint: placeHint(quote) });
+  }
+  // "SUGAAR IS THAT DREAM MIX…" even when the opening quote mark wasn't read.
+  if (!out.some((o) => o.name)) {
+    const n = sayIs(L.map((l) => l.text).join(' '));
+    if (n) {
+      const q = out.find((o) => !o.name);
+      if (q) Object.assign(q, { name: n, weight: 7, why: 'on the photo · named in the quote' });
+      else out.push({ name: n, why: 'on the photo · named in the quote', weight: 7, note: sentence(L.map((l) => l.text).join(' ')), hint: placeHint(L.map((l) => l.text).join(' ')) });
+    }
+  }
+  // A lone short line, biggest first ("VIRAGE"), when there's no quote to anchor on.
+  if (!out.some((o) => o.name)) {
+    const lone = L.filter((l, i) => !used.has(i) && l.text.split(/\s+/).length <= 4 && !STOP.test(l.text) && !junk(l.text) && !/[.!?]$/.test(l.text) && !/[€£$]|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise/i.test(l.text) && /\p{L}{3,}/u.test(l.text))
+      .sort((a, b) => b.h - a.h);
+    lone.slice(0, 2).filter((l, k) => !k || l.h >= lone[0].h * 0.8).forEach((l, k) => out.push({ name: l.text, why: k ? 'on the photo' : 'on the photo · biggest text', weight: k ? 3 : 5 }));
+  }
+  // Facts worth keeping as the note: price, hours, music.
+  const facts = L.filter((l, i) => !used.has(i) && /[€£$]\s?\d|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise|till|until|techno|house|jazz|disco|entry|free/i.test(l.text)).map((l) => l.text);
+  if (facts.length) for (const o of out) o.note = [o.note, ...facts].filter(Boolean).join(' · ');
+  return out;
+}
+
+// Places a caption or quote mentions: "near Canal St Martin", "on Rue de Charonne",
+// "in the 11th", "Passage des Panoramas", "Saint-Germain-des-Prés".
+function sayIs(t) {
+  const m = t.match(/(?:^|[“"\s])([A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}(?:\s+[A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}){0,3})\s+(?:IS|1S|ES|ARE|HAS)\s+(?:THAT|THE|A|AN|WHERE|ONE)\b/u);
+  if (!m || STOP.test(m[1]) || junk(m[1])) return null;
+  return m[1].toLowerCase().replace(/\b\p{L}/gu, (c) => c.toUpperCase());
+}
+export function placeHint(text) {
+  const t = text.replace(/\s+/g, ' ');
+  const street = t.match(/\b((?:rue|place|passage|canal|quai|boulevard|bd|avenue|parc|jardin|march[ée]|square|pont|porte|cour|galerie)\s+(?:(?:de|du|des|la|le|les|d'|st|saint|sainte)\s*)*[\p{L}'’-]+(?:\s+[\p{Lu}][\p{L}'’-]+)?)/iu);
+  if (street) return street[1].replace(/\s+(so|where|with|and|for|the|serving|from)$/i, '').replace(/\b\p{L}/gu, (m) => m.toUpperCase()).replace(/\b(De|Du|Des|La|Le|Les)\b/g, (m) => m.toLowerCase());
+  const arr = t.match(/\bin the (\d{1,2})(?:st|nd|rd|th)\b/i) || t.match(/\b(\d{1,2})(?:e|ème|er)\b/);
+  if (arr) return `${arr[1]}e`;
+  const named = t.match(/\b(saint-germain(?:-des-pr[ée]s)?|le marais|marais|pigalle|montmartre|belleville|oberkampf|bastille|canal saint-martin|batignolles|république|châtelet|les halles)\b/i);
+  return named ? named[1] : null;
+}
+
+// Facts from a caption worth saving with the place: opening hours, prices.
+export function captionFacts(text) {
+  return (text || '').split(/(?<=[.!?])\s+|\n+/).filter((x) => /\b\d{1,2}\s?(am|pm|h\d{0,2})\b|\b\d{1,2}[:h]\d{2}\b|[€£$]\s?\d|\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday|weekend|lundi|mardi|mercredi|jeudi|vendredi|samedi|dimanche)s?\b/i.test(x)).map((x) => x.trim()).slice(0, 2).join(' ');
 }
 
 // Two lines of evidence, in order:
@@ -174,11 +304,9 @@ export function firstLine({ post, lines, height, text }) {
   return tag(venueCandidates(clean.map((l) => l.text).join('\n'), clean, height), 'on screen');
 }
 export const isStrong = (cands) => cands.some((c) => c.weight >= 4);
-export function tieredCandidates(first, pictureText, text) {
+export function tieredCandidates(first, picture, text) {
   if (isStrong(first)) return first;
-  // Picture text is short and clean: "ROJO, Paris" → also try what comes before the comma.
-  const pt = [pictureText, ...pictureText.split('\n').map((l) => l.split(/[,|–—]/)[0])].join('\n');
-  const pic = tag(venueCandidates(pt), 'in the picture').map((c) => ({ ...c, weight: Math.max(c.weight, 4) }));
+  const pic = picture.filter((c) => c.name);
   const seen = new Set();
   const both = [...first, ...pic].filter((c) => !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase()));
   return both.length ? both.sort((a, b) => b.weight - a.weight).slice(0, 8) : venueCandidates(text);
@@ -239,6 +367,25 @@ function junk(name) {
 
 // Candidate venue names from a screenshot / caption / page text.
 // lines (with positions and sizes) come from the on-device reader when there's an image.
+const GENERIC_TAG = /^(bars?|clubs?|restaurants?|cafes?|coffee|brunch|wine|cocktails?|techno|house|nightlife|foodie|foodporn|instagood|reels?|fyp|foryou|viral|explore|summer|vintage|antiques?|fleamarket|hiddengems?|travelgram|wanderlust|weekend|love|art|music|dj|rave|drinks?|dinner|lunch)$/;
+// "caveaudelahuchette" → "Caveau de la Huchette"
+const PARTS = ['della', 'des', 'del', 'de', 'du', 'di', 'la', 'le', 'les', 'chez', 'the', 'of', 'and', 'et'];
+function particles(t) { // "dela" → ["de","la"], or null
+  if (!t) return [];
+  for (const p of PARTS) if (t.startsWith(p)) { const r = particles(t.slice(p.length)); if (r) return [p, ...r]; }
+  return null;
+}
+export function splitTag(t) {
+  let best = null;
+  for (let i = 3; i <= t.length - 5; i++)
+    for (let j = i + 2; j <= t.length - 3; j++) {
+      const ps = particles(t.slice(i, j));
+      if (ps && (!best || ps.length > best.ps.length || (ps.length === best.ps.length && i === best.i && j > best.j))) best = { i, j, ps };
+    }
+  const cap = (w) => w[0].toUpperCase() + w.slice(1);
+  if (!best) return cap(t);
+  return [cap(t.slice(0, best.i)), ...best.ps, splitTag(t.slice(best.j))].join(' ');
+}
 export function venueCandidates(text, lines = null, height = 1) {
   const out = [];
   const add = (name, why, weight) => {
@@ -284,6 +431,21 @@ export function venueCandidates(text, lines = null, height = 1) {
   }
   const addressed = out.filter((o) => o.why === 'name + address');
   if (addressed.length) return addressed;
+
+  // Instagram location tag: "victoiretaverne 📍 Les Puces de Vanves, Porte de Vanves, Paris"
+  // (the pin often reads as junk like "Ÿ").
+  for (const l of all.slice(0, 6)) {
+    const m = l.match(/^[a-z0-9._]{3,30}\s+(?:\S{1,2}\s+)?(\p{Lu}[^,]{2,40}),\s*\p{Lu}[^,]*(?:,|$)/u);
+    if (m) add(m[1], 'location tag', 6);
+  }
+  // Hashtags that aren't generic: #caveaudelahuchette → "Caveau de la Huchette", checked on the map.
+  for (const m of text.matchAll(/#([\p{L}\d_]{6,40})/gu)) {
+    const t = m[1].toLowerCase();
+    if (GENERIC_TAG.test(t) || /paris|berlin|london|barcelona|france|europe|travel|food|night|party|guide/.test(t)) continue;
+    const before = out.length;
+    add(splitTag(t), 'hashtag', 3);
+    if (out.length > before) out[out.length - 1].squash = t.replace(/[^a-z0-9]/g, '');
+  }
 
   for (const l of all) {
     const pin = l.match(/(?:📍|📌|location:|address:|adresse\s*:)\s*(.+)/i);
