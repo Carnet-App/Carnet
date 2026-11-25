@@ -117,3 +117,7 @@ select.in { -webkit-appearance: none; appearance: none; background-image: linear
 /* iOS draws time and date inputs with their text at the top: centre it like the other fields. */
 input.in[type='time'], input.in[type='date'] { -webkit-appearance: none; appearance: none; display: flex; align-items: center; line-height: 42px; text-align: left; }
 input.in[type='time']::-webkit-date-and-time-value, input.in[type='date']::-webkit-date-and-time-value { text-align: left; margin: 0; line-height: 42px; }
+
+/* Map pins: names only when zoomed in (or for the picked one), so they don't pile up. */
+.pin .pin-label { display: none; }
+.map-labels .pin .pin-label, .pin.pin-on .pin-label { display: block; }
