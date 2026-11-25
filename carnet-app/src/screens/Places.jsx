@@ -35,6 +35,8 @@ export default function Places({ t, me, city, onBack, open }) {
   const home = t ? stayFor(t.stays, todayISO()) : null;
   const onTrip = useMemo(() => new Map((t?.items || []).filter((i) => i.place_id).map((i) => [i.place_id, i])), [t?.items]);
 
+  // Name the stay ("Hôtel Jules") rather than calling it home; long names → "your stay".
+  const stayLabel = home?.name && home.name.length <= 24 ? home.name : 'your stay';
   const list = all
     .filter((p) => c === 'all' || p.category === c)
     .filter((p) => filter === 'all' || (filter === 'ig' ? p.source === 'instagram' : filter === 'new' ? !p.visited : filter === 'check' ? p.needs_check : true))
@@ -79,7 +81,7 @@ export default function Places({ t, me, city, onBack, open }) {
                   <div className="n">{p.name}</div>
                   <div className="row" style={{ gap: 6, marginTop: 3 }}>
                     <span className="pill" style={{ background: p.visited ? '#E1F0E8' : s[1], color: p.visited ? '#24563F' : s[2] }}>{p.visited ? 'Visited' : s[0]}</span>
-                    <span className="s">{p.walk != null ? `${p.walk} min from home` : p.address || ''}</span>
+                    <span className="s">{p.walk != null ? `${p.walk} min walk from ${stayLabel}` : p.address || ''}</span>
                   </div>
                 </div>
               </button>

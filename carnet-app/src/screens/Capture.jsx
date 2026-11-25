@@ -37,7 +37,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       // Text inside pictures is read on demand: always for a post's photo (it often says
       // "hidden bar in Le Marais"), otherwise only if the screen's own text wasn't enough.
       const pictureText = !isVideo && r.canvas ? () => readOverlay(r.canvas, post ? post.media : { y0: 0, y1: r.canvas.height }).catch(() => '') : null;
-      await understand({ text: r.text, lines: r.lines, height: r.height, qr: r.qr, thumb, photo, post, pictureText, source: /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
+      await understand({ text: r.text, lines: r.lines, height: r.height, qr: r.qr, thumb, photo, post, pictureText, source: post ? 'instagram' : /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
     } catch (e) {
       setProgress('Couldn’t read that one: ' + e.message);
       setStage('pick');
