@@ -59,3 +59,9 @@ test('F10: a photo waiting for signal is a saved job, not a memory-only queue', 
   assert.deepEqual(server.uploads, ['trips/t/x.jpg']);
   assert.equal(store.getState().outbox.length, 0);
 });
+
+test('proposal decisions go up as plain updates, not upserts (the insert rule is only for the proposer)', async () => {
+  const src = (await import('node:fs')).readFileSync(new URL('../../src/lib/proposals.js', import.meta.url), 'utf8');
+  assert.ok(/patch\('proposals', p\.id, \{ status: approve/.test(src));
+  assert.ok(!/upsert\('proposals', \{ id: p\.id/.test(src));
+});

@@ -1,5 +1,5 @@
 // The master schedule: admins change it directly; everyone else proposes.
-import { upsert, remove, uid, failedJobs, dropFailed } from './store';
+import { upsert, patch, remove, uid, failedJobs, dropFailed } from './store';
 import { notify } from './push';
 import { dayLabel, hm, nameOf } from './util';
 
@@ -45,7 +45,7 @@ export function decide(t, p, approve, note) {
         ...(p.kind === 'add' ? { created_by_email: p.proposed_by_email } : {}),
       });
   }
-  upsert('proposals', { id: p.id, status: approve ? 'approved' : 'declined', note: note || null, decided_by_email: t.me, decided_at: new Date().toISOString() });
+  patch('proposals', p.id, { status: approve ? 'approved' : 'declined', note: note || null, decided_by_email: t.me, decided_at: new Date().toISOString() });
   const what = p.payload?.title || p.before?.title;
   notify(t.trip.id, {
     onlyEmail: p.proposed_by_email,
@@ -58,22 +58,30 @@ export function decide(t, p, approve, note) {
 // Edits an admin made while the app wrongly thought they needed approval: the server refused
 // the proposal, so the change never happened. Now the app knows better, make the change itself.
 export function recoverOwnProposals(t) {
-  if (!t?.trip || !t.canEdit) return 0;
+  if (!t?.trip) return 0;
   let n = 0;
   for (const j of failedJobs()) {
     const p = j.table === 'proposals' && j.op === 'upsert' ? j.row : null;
-    if (!p || p.trip_id !== t.trip.id || p.status !== 'pending' || !p.kind) continue;
+    if (!t.canEdit || !p || p.trip_id !== t.trip.id || p.status !== 'pending' || !p.kind) continue;
     if (p.kind === 'remove') remove('items', p.item_id);
     else upsert('items', { ...(p.kind === 'change' ? {} : { visibility: 'shared', status: 'planned' }), ...p.payload, id: p.item_id, trip_id: p.trip_id });
     remove('proposals', p.id);
     n++;
   }
   if (n) dropFailed((j) => j.table === 'proposals' && j.row?.trip_id === t.trip.id && j.row?.status === 'pending');
-  return n;
+  // Approvals, declines and withdrawals refused the same way: send them again as plain updates.
+  // (The schedule change of an approval went through on its own; only the proposal's status didn't.)
+  const decided = failedJobs().filter((j) => j.table === 'proposals' && j.op === 'upsert' && j.row?.trip_id === t.trip.id && j.row?.status !== 'pending');
+  for (const j of decided) {
+    const { status, note, decided_by_email, decided_at } = j.row;
+    patch('proposals', j.row.id, { status, note: note ?? null, decided_by_email: decided_by_email ?? null, decided_at: decided_at ?? null });
+  }
+  if (decided.length) dropFailed((j) => decided.includes(j));
+  return n + decided.length;
 }
 
 export function withdraw(p) {
-  upsert('proposals', { id: p.id, status: 'withdrawn' });
+  patch('proposals', p.id, { status: 'withdrawn' });
 }
 
 // Tell everyone when the schedule changes directly.

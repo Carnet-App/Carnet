@@ -50,7 +50,8 @@ let inFlight = null; // the job being sent right now
 function enqueue(job) {
   const same = (j) => j.table === job.table && (j.row?.id || j.id) === (job.row?.id || job.id) && j.jid !== inFlight;
   // A newer write of the same row replaces one still waiting (it carries the whole row anyway).
-  const keep = job.op === 'upsert' ? state.outbox.filter((j) => !(j.op === 'upsert' && same(j))) : state.outbox.filter((j) => !same(j));
+  // A partial update keeps everything before it (it only adds fields); a delete clears all of them.
+  const keep = job.op === 'update' ? state.outbox : job.op === 'upsert' ? state.outbox.filter((j) => !(j.op === 'upsert' && same(j))) : state.outbox.filter((j) => !same(j));
   const replaced = state.outbox.find((j) => j.op === 'upsert' && same(j));
   if (replaced && job.op === 'upsert') job.base = replaced.base;
   state.outbox = [...keep, job];
@@ -73,6 +74,20 @@ export function dropFailed(pred) {
   const n = state.failed.length;
   state.failed = state.failed.filter((j) => !pred(j));
   if (state.failed.length !== n) { persist(); emit(); }
+}
+
+// Change some fields of a row that already exists on the server, sent as a plain UPDATE. An upsert
+// would be checked against the INSERT rule too, and for proposals that rule only lets the person
+// who proposed it insert — so an admin's approve/decline must go this way.
+export function patch(table, id, fields) {
+  const before = state[table][id];
+  const full = { ...fields, updated_at: new Date().toISOString() };
+  state[table] = { ...state[table], [id]: { ...(before || { id }), ...full } };
+  enqueue({ jid: uid(), table, op: 'update', id, fields: full });
+  emit();
+  persist();
+  flush();
+  return state[table][id];
 }
 
 export function remove(table, id) {
@@ -133,6 +148,7 @@ async function send(job) {
     return supabase.storage.from('captures').upload(job.id, blob, { contentType: blob.type || job.contentType, upsert: true });
   }
   if (job.op === 'delete') return supabase.from(job.table).delete().eq('id', job.id);
+  if (job.op === 'update') return supabase.from(job.table).update(job.fields).eq('id', job.id);
   const row = clean(job.table, job.row);
   if (!VERSIONED.has(job.table)) {
     const res = await supabase.from(job.table).upsert(row);
