@@ -1,3 +1,4 @@
+import { nameMatch } from './match.js';
 import { useEffect, useState } from 'react';
 import { authHeader } from './supabase';
 
@@ -114,34 +115,31 @@ export async function api(path, params = {}, auth = false) {
 }
 
 // Venue lookup: OpenStreetMap first, Google only as a last resort.
-export async function findVenue(q, near, typeHint) {
+// Map search. OpenStreetMap only, unless a person asked for Google (a tap, never during import).
+// opts.google: also ask Google when no OSM result is a good match (every result is judged).
+// opts.fillNames: give nameless results (a house, a street) their address as a name, for pickers
+// where an address is a fine answer (a stay); they're marked addressOnly.
+export async function findVenue(q, near, typeHint, opts = {}) {
   const p = { q, lat: near?.lat, lng: near?.lng };
   let res = [];
   try { res = (await api('/api/geo', p)).results || []; } catch {}
-  const best = res.length ? similarity(q, res[0].name) : 0;
-  if (best < 0.7) {
+  const name = opts.name || q;
+  const best = Math.max(0, ...res.map((r) => nameMatch(name, r.name, { city: opts.city })));
+  if (opts.google && best < 0.9) {
     try {
       const g = (await api('/api/google', { ...p, q: typeHint ? `${q} ${typeHint}` : q }, true)).results || [];
       res = [...g, ...res];
     } catch {}
   }
+  if (opts.fillNames) res = res.map((r) => (r.name ? r : { ...r, name: r.address || q, addressOnly: true }));
   return res;
 }
 
 export function norm(s = '') {
   return s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9 ]/g, ' ').replace(/\b(le|la|les|the|bar|cafe|restaurant)\b/g, ' ').replace(/\s+/g, ' ').trim();
 }
-export function similarity(a, b) {
-  a = norm(a); b = norm(b);
-  if (!a || !b) return 0;
-  if (a === b) return 1;
-  if (a.includes(b) || b.includes(a)) return 0.85;
-  const grams = (s) => new Set([...Array(Math.max(1, s.length - 1))].map((_, i) => s.slice(i, i + 2)));
-  const A = grams(a), B = grams(b);
-  let n = 0;
-  A.forEach((g) => B.has(g) && n++);
-  return (2 * n) / (A.size + B.size);
-}
+// Kept for older callers: the conservative name matcher (no substring bonus, city words ignored).
+export const similarity = (a, b) => nameMatch(a, b);
 
 export const nameOf = (members, email) =>
   members.find((m) => m.email?.toLowerCase() === email?.toLowerCase())?.name || (email || '?').split('@')[0];

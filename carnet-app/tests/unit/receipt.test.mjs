@@ -47,3 +47,11 @@ test('quantities are kept as separate fields, not folded into the name', { todo:
   assert.equal(l.quantity, 3);
   assert.equal(l.unitPrice, 2.15);
 });
+
+test('F3: the check follows edits — fixing a misread line reconciles, breaking one shows the gap', async () => {
+  const { checkTotal } = await import('../../src/lib/receipt.js');
+  assert.deepEqual(checkTotal(3600, 3100, 400), { status: 'difference', diff: 100 });
+  assert.deepEqual(checkTotal(3600, 3200, 400), { status: 'reconciled', diff: 0 });
+  assert.deepEqual(checkTotal(null, 3200, 0), { status: 'unverified', diff: null });
+  assert.equal(checkTotal(3600, 3200, 0, 12.5).status, 'reconciled');
+});

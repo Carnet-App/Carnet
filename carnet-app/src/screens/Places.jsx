@@ -116,7 +116,7 @@ export function AddPlace({ city, near, onClose, onAdded }) {
   const [busy, setBusy] = useState(false);
   async function search() {
     setBusy(true);
-    setRes(await findVenue(`${q} ${city}`, near).catch(() => []));
+    setRes(await findVenue(`${q} ${city}`, near, null, { google: true, fillNames: true, name: q, city }).catch(() => []));
     setBusy(false);
   }
   function add(r) {
@@ -165,7 +165,7 @@ export function PlaceDetail({ p: initial, onClose }) {
   }
   async function check() {
     setMsg('Looking it up…');
-    setMatches(await findVenue(`${p.name} ${p.city}`, null).catch(() => []));
+    setMatches(await findVenue(`${p.name} ${p.city}`, null, null, { google: true, fillNames: true, name: p.name, city: p.city }).catch(() => []));
     setMsg('');
   }
 

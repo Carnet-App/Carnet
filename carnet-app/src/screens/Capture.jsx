@@ -6,6 +6,7 @@ import { storeFile } from '../lib/files';
 import { saveInspection, compactLines } from '../lib/inspect';
 import InspectPanel from './InspectPanel';
 import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS, norm } from '../lib/util';
+import { nameMatch, rankResults, squashName } from '../lib/match';
 import ItemEditor from './ItemEditor';
 import { AddPlace } from './Places';
 import { useStore } from '../lib/store';
@@ -137,60 +138,69 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       for (const q of (pg.pic || []).filter((c) => !c.name))
         if (!cands.some((c) => c.weight >= 5)) found.push({ c: { ...q, name: '' }, photo: pg.photo, area, kind, nameless: true });
     }
-    // The same place on several screenshots (a long caption split in two): one listing.
+    // The same place on several screenshots, or named twice on one ("LAPERLE" on the photo,
+    // @cafelaperle in the caption): one listing, with the fuller name.
     const merged = [];
+    const sameCore = (x, y) => { const a = squashName(x), b = squashName(y); return Math.min(a.length, b.length) >= 6 && (a.includes(b) || b.includes(a)); };
     for (const f of found) {
-      const ex = f.nameless ? null : merged.find((m) => !m.nameless && (norm(m.c.name) === norm(f.c.name) || similarity(m.c.name, f.c.name) >= 0.9));
+      const ex = f.nameless ? null : merged.find((m) => !m.nameless && (nameMatch(m.c.name, f.c.name) >= 0.9 || sameCore(m.c.name, f.c.name)));
       if (ex) {
-        ex.c.weight = Math.max(ex.c.weight, f.c.weight);
+        if (squashName(f.c.name).length > squashName(ex.c.name).length) ex.c.alts = [...(ex.c.alts || []), ex.c.name];
+        else ex.c.alts = [...(ex.c.alts || []), f.c.name];
+        if (squashName(f.c.name).length > squashName(ex.c.name).length) { ex.c.name = f.c.name; ex.c.squash = f.c.squash || ex.c.squash; }
+        ex.c.weight = Math.max(ex.c.weight, f.c.weight) + (ex.c.why === f.c.why ? 0 : 1); // two kinds of evidence
         ex.c.note = [...new Set([ex.c.note, f.c.note].filter(Boolean))].join(' · ') || null;
         ex.c.hint ||= f.c.hint;
         ex.c.address ||= f.c.address;
-      } else merged.push(f);
+        ex.c.alts = [...new Set([...(ex.c.alts || []), ...(f.c.alts || [])])].filter((n) => n !== ex.c.name);
+      } else merged.push({ ...f, c: { ...f.c } });
     }
-    setProgress(navigator.onLine ? 'Checking those names on the map…' : 'Offline — these will be checked when you have signal.');
+    const online = navigator.onLine;
+    setProgress(online ? 'Checking those names on the map…' : 'Offline — these will be checked when you have signal.');
     const venues = [];
     // Strongest first, so a name with its address on screenshot 13 isn't cut off by weak
     // @mentions from the earlier ones (the cap only drops the weakest).
     const ranked = merged.map((f, i) => ({ f, i })).sort((a, b) => (b.f.nameless ? 4 : b.f.c.weight) - (a.f.nameless ? 4 : a.f.c.weight) || a.i - b.i).slice(0, 14).sort((a, b) => a.i - b.i).map((x) => x.f);
+    const search = (q, at, type) => findVenue(q.replace(/\s+/g, ' ').trim(), at, type, { name: q, city }).catch(() => []);
     for (const f of ranked) {
       const { c, photo, area, kind } = f;
       if (f.nameless) {
         venues.push({ kind, cand: c, options: [], pick: null, keep: false, sure: false, photo, nameless: true, cat: guessCategory('', `${c.note || ''} ${kind || ''}`) });
         continue;
       }
-      if (navigator.onLine && c.address) {
-        // The screenshot gave us the address: place it there.
-        const [spot] = (await api('/api/geo', { q: c.address, lat: near?.lat, lng: near?.lng }).catch(() => ({}))).results || [];
-        const named = await findVenue(`${c.name} ${city}`.trim(), spot || near, c.type).catch(() => []);
-        const there = spot ? named.filter((m) => distM(spot, m) < 250 && similarity(c.name, m.name) >= 0.6) : [];
-        const opt = there[0] || (spot && { ...spot, name: c.name, address: c.address, osm_value: null });
-        if (opt) {
-          venues.push({ kind, cand: c, options: [{ ...opt, sim: 1 }], pick: 0, keep: true, sure: true, photo });
+      if (online && c.address) {
+        // The post gave the address. A venue of that name there is a match; otherwise the place
+        // goes at the address, labelled as such (not as a confirmed venue: defect 8).
+        const [spot] = (await api('/api/geo', { q: `${c.address} ${city}`.trim(), lat: near?.lat, lng: near?.lng }).catch(() => ({}))).results || [];
+        const named = await search(`${c.name} ${city}`, spot || near, c.type);
+        const there = spot ? rankResults(c.name, named.filter((m) => distM(spot, m) < 250), { city, alts: c.alts }) : { best: null };
+        if (there.best && there.best.sim >= 0.9) {
+          venues.push({ kind, cand: c, options: [there.best], pick: 0, keep: true, sure: true, photo });
+          continue;
+        }
+        if (spot) {
+          venues.push({ kind, cand: c, options: [{ ...spot, name: c.name, address: c.address, osm_value: null, addressOnly: true, sim: 1 }], pick: 0, keep: true, sure: false, located: 'address', photo });
+          log.lookups.push({ name: c.name, weight: c.weight, why: c.why, address: c.address, decision: 'placed at the address in the post' });
           continue;
         }
       }
       let matches = [];
-      if (navigator.onLine) {
-        matches = await findVenue(`${c.name} ${area || ''} ${city}`.trim(), near, c.type || kind).catch(() => []);
-        // Nothing close? Try again with the place the caption or quote mentions ("near Canal St Martin").
-        if (c.hint && !matches.some((m) => similarity(c.name, m.name) >= 0.8))
-          matches = [...matches, ...(await findVenue(`${c.name} ${c.hint} ${city}`.trim(), near, c.type || kind).catch(() => []))];
+      if (online) {
+        matches = await search(`${c.name} ${area || ''} ${city}`, near, c.type || kind);
+        for (const alt of c.alts || []) if (!rankResults(c.name, matches, { city, alts: c.alts, squash: c.squash }).sure) matches = [...matches, ...(await search(`${alt} ${area || ''} ${city}`, near, c.type || kind))];
+        // Nothing sure? Try again with the place the caption or quote mentions ("near Canal St Martin").
+        if (c.hint && !rankResults(c.name, matches, { city, alts: c.alts, squash: c.squash }).sure)
+          matches = [...matches, ...(await search(`${c.name} ${c.hint} ${city}`, near, c.type || kind))];
       }
-      const scored = matches
-        .map((m) => ({ ...m, sim: c.squash && norm(m.name).replace(/ /g, '') === c.squash ? 1 : similarity(c.name, m.name), far: near && distM(near, m) > 25000 }))
-        .filter((m) => !m.far && !/^(city|town|village|country|state|county|administrative|region|province|postcode|suburb|neighbourhood|quarter|district|locality|political)$/.test(m.osm_value || ''))
-        .filter((m) => m.sim >= 0.35)
-        .filter((m, i, a) => a.findIndex((x) => distM(x, m) < 30 && norm(x.name) === norm(m.name)) === i)
-        .sort((a, b) => b.sim - a.sim);
-      const best = scored[0];
-      const sure = best && best.sim >= 0.8 && (c.weight >= 3 || best.sim >= 0.95);
-      log.lookups.push({ name: c.name, weight: c.weight, why: c.why, hint: c.hint || null, online: navigator.onLine,
-        results: matches.map((m) => ({ name: m.name, osm: m.osm_value || null, sim: Math.round(similarity(c.name, m.name) * 100) / 100 })),
-        kept: scored.slice(0, 3).map((m) => ({ name: m.name, sim: Math.round(m.sim * 100) / 100 })), sure: !!sure,
-        decision: !scored.length && c.weight < 4 ? 'dropped: weak guess, no map match' : sure ? 'matched' : scored.length ? 'asked' : 'kept without match' });
-      if (!scored.length && c.weight < 4) continue; // weak guess with no match: don't bother asking
-      venues.push({ kind, cand: c, options: scored.slice(0, 3), pick: sure ? 0 : null, keep: sure, sure, photo });
+      const inRange = matches.filter((m) => !(near && distM(near, m) > 25000));
+      const { scored, sure, branches } = rankResults(c.name, inRange, { city, alts: c.alts, squash: c.squash });
+      const decision = !online ? 'not checked: offline' : !scored.length && c.weight < 4 ? 'dropped: weak guess, no map match' : sure ? 'matched' : branches ? 'asked: several branches' : scored.length ? 'asked' : 'kept without match';
+      log.lookups.push({ name: c.name, alts: c.alts || null, weight: c.weight, why: c.why, hint: c.hint || null, online,
+        results: matches.map((m) => ({ name: m.name, osm: m.osm_value || null, sim: nameMatch(c.name, m.name, { city }) })),
+        kept: scored.slice(0, 3).map((m) => ({ name: m.name, sim: m.sim })), sure, decision });
+      // A weak guess with no match isn't worth asking about, but offline we can't tell yet (defect 12).
+      if (online && !scored.length && c.weight < 4) continue;
+      venues.push({ kind, cand: c, options: scored.slice(0, 3), pick: sure ? 0 : null, keep: sure, sure, photo, ...(online ? {} : { unchecked: true }) });
     }
     // Each listing keeps the kind read from its own page (indexes shift when weak guesses are dropped).
     for (const v of venues) if (!v.nameless) v.cat = catFor(v, v.kind);
@@ -301,11 +311,12 @@ function FixName({ v, city, near, onFound, startOpen = false, placeholder = 'e.g
     const name = q.trim();
     if (!name) return;
     setBusy(true);
-    let res = navigator.onLine ? await findVenue(`${name} ${city || ''}`.trim(), near).catch(() => []) : [];
-    if (navigator.onLine && v.cand.hint && !res.some((m) => similarity(name, m.name) >= 0.8))
-      res = [...res, ...(await findVenue(`${name} ${v.cand.hint} ${city || ''}`.trim(), near).catch(() => []))];
-    const scored = res.map((m) => ({ ...m, sim: similarity(name, m.name) })).filter((m) => m.sim >= 0.35).sort((a, b) => b.sim - a.sim).slice(0, 3);
-    const sure = scored[0]?.sim >= 0.8;
+    // Typed by you, so this search may ask Google too (it's a tap, not automatic).
+    let res = navigator.onLine ? await findVenue(`${name} ${city || ''}`.trim(), near, null, { google: true, name, city }).catch(() => []) : [];
+    if (navigator.onLine && v.cand.hint && !rankResults(name, res, { city }).sure)
+      res = [...res, ...(await findVenue(`${name} ${v.cand.hint} ${city || ''}`.trim(), near, null, { google: true, name, city }).catch(() => []))];
+    const { scored: all, sure } = rankResults(name, res, { city });
+    const scored = all.slice(0, 3);
     const next = { cand: { ...v.cand, name, why: 'typed by you' }, options: scored, pick: sure ? 0 : null, keep: true, sure: false, nameless: false };
     onFound({ ...next, cat: v.catSet ? v.cat : catFor(next, null) });
     setBusy(false);
@@ -319,6 +330,20 @@ function FixName({ v, city, near, onFound, startOpen = false, placeholder = 'e.g
       <button className="btn" disabled={busy || !q.trim()} onClick={go}>{busy ? '…' : 'Find'}</button>
     </div>
   );
+}
+
+// Only when you tap it: ask Google about a name OpenStreetMap couldn't settle.
+function GoogleTry({ v, city, near, onFound }) {
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    setBusy(true);
+    const res = await api('/api/google', { q: `${v.cand.name} ${city || ''}`.trim(), lat: near?.lat, lng: near?.lng }, true).then((d) => d.results || []).catch(() => []);
+    const { scored } = rankResults(v.cand.name, res, { city, alts: v.cand.alts });
+    const seen = new Set(v.options.map((o) => squashName(o.name)));
+    onFound({ options: [...scored.filter((o) => !seen.has(squashName(o.name))), ...v.options].slice(0, 4), googled: true });
+    setBusy(false);
+  }
+  return <button className="chip" style={{ fontSize: 12, alignSelf: 'flex-start' }} disabled={busy} onClick={go}>{busy ? 'Asking Google…' : 'Search Google for it'}</button>;
 }
 
 // Is this place already in the guide? Same name, or nearly the same name in nearly the same spot
@@ -388,7 +413,7 @@ function VenueReview({ t, r, setR, onDone }) {
           address: m?.address || v.cand.address || null, lat: m?.lat ?? null, lng: m?.lng ?? null,
           source: r.source, source_detail: r.handle ? '@' + r.handle : null, link: r.link || null,
           photo_path: photo, photo_url: m?.google_id ? `/api/gphoto?id=${encodeURIComponent(m.google_id)}` : null,
-          notes: note, collection: collection || null, needs_check: !m,
+          notes: note, collection: collection || null, needs_check: !m || !!m.addressOnly,
         });
       }
       if (t && alsoTrip && city.toLowerCase() === t.trip.city?.toLowerCase() && !onTrip.has(id))
@@ -421,7 +446,7 @@ function VenueReview({ t, r, setR, onDone }) {
                       <div className="s">
                         {v.nameless
                           ? v.cand.hint ? `Somewhere near ${v.cand.hint}` : 'What’s it called?'
-                          : v.pick != null ? `${v.sure ? 'Matched' : 'You picked'} · ${v.options[v.pick].address || ''}` : v.options.length ? 'Not sure — is it one of these?' : navigator.onLine ? 'No match on the map — keep as a note?' : 'Will be checked when you have signal'}
+                          : v.located === 'address' && v.pick === 0 ? `At the address in the post · ${v.options[0].address || ''}` : v.pick != null ? `${v.sure ? 'Matched' : 'You picked'} · ${v.options[v.pick].address || ''}` : v.unchecked ? 'Not checked yet — no signal' : v.options.length ? 'Not sure — is it one of these?' : 'No match on the map — keep as a note?'}
                       </div>
                       {ex && <div className="s" style={{ color: 'var(--amber, #8A5A14)', marginTop: 2 }}>Already in your {city} guide — this adds to it</div>}
                     </div>
@@ -439,6 +464,7 @@ function VenueReview({ t, r, setR, onDone }) {
                 )}
                 {v.nameless && <FixName v={v} city={city} near={near} startOpen placeholder="Type the name you see" onFound={(patch) => upd(i, patch)} />}
                 {!v.sure && !v.nameless && <FixName v={v} city={city} near={near} onFound={(patch) => upd(i, patch)} />}
+                {!v.sure && !v.nameless && v.pick == null && !v.googled && navigator.onLine && <GoogleTry v={v} city={city} near={near} onFound={(patch) => upd(i, patch)} />}
                 {!v.sure && !v.nameless && v.options.length > 0 && (
                   <div className="chips">
                     {v.options.map((o, k) => (

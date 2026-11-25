@@ -1,3 +1,4 @@
+import { handleName, squashName } from './match.js';
 // Reading screenshots, screen recordings, receipts and tickets — all on the phone.
 import jsQR from 'jsqr';
 
@@ -344,6 +345,7 @@ const sentence = (t) => t.replace(/[“”"«»_]/g, '').replace(/\s+/g, ' ').tr
 const squash = (t) => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
 
 export function overlayCandidates(lines, { handle } = {}) {
+  let alts = null;
   const me = handle ? squash(handle) : null;
   const L = lines.map((l) => ({ ...l, text: l.text.replace(/\b\d+\s*\/\s*\d+\b/g, '').replace(/^[^\p{L}\p{N}“"«<‘'€£$]+/u, '').trim() })).filter((l) => {
     const t = l.text;
@@ -370,11 +372,16 @@ export function overlayCandidates(lines, { handle } = {}) {
     if (above && !used.has(i - 1) && above.text.split(/\s+/).length <= 5 && !STOP.test(above.text) && !junk(above.text) && L[i].y - (above.y + above.h) < L[i].h * 3) {
       name = above.text;
       used.add(i - 1);
+      // The same line read twice (full pass and line pass): keep the other reading too, and let
+      // the map decide ("Bish rot Des Tournelles" / "Bistrot Des Tournelles").
+      alts = L.filter((l, k) => k !== i - 1 && !used.has(k) && l.y < above.y + above.h && l.y + l.h > above.y && l.text !== above.text && !QUOTE_OPEN.test(l.text)).map((l) => l.text);
+      alts.forEach((t) => used.add(L.findIndex((l) => l.text === t)));
     }
     // "SUGAAR IS THAT DREAM MIX…": the quote names the place itself.
     if (!name) name = q.map(sayIs).find(Boolean) || null;
     if (false) name = q.join(' ').match(/(?:^|[“"\s])([A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}(?:\s+[A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}){0,3})\s+(?:IS|1S|ES|ARE|HAS)\s/u)?.[1] || null;
-    out.push({ name: name || '', why: name ? 'on the photo · name above a quote' : 'on the photo · quote', weight: name ? 8 : 4, note: quote, hint: placeHint(quote) });
+    out.push({ name: name || '', why: name ? 'on the photo · name above a quote' : 'on the photo · quote', weight: name ? 8 : 4, note: quote, hint: placeHint(quote), ...(name && alts?.length ? { alts } : {}) });
+    alts = null;
   }
   // "SUGAAR IS THAT DREAM MIX…" even when the opening quote mark wasn't read.
   if (!out.some((o) => o.name)) {
@@ -596,7 +603,11 @@ export function venueCandidates(text, lines = null, height = 1, opts = {}) {
   for (const l of all) {
     const pin = l.match(/(?:📍|📌|location:|address:|adresse\s*:)\s*(.+)/i);
     if (pin) add(pin[1].split(/[,–—-]/)[0], 'pin / location', 5);
-    for (const m of l.matchAll(/@([a-z0-9._]{3,30})/gi)) add(m[1].replace(/[._]/g, ' '), '@mention', 2);
+    for (const m of l.matchAll(/@([a-z0-9._]{3,30})/gi)) {
+      const before = out.length;
+      add(handleName(m[1]), '@mention', 2);
+      if (out.length > before) out[out.length - 1].squash = squashName(handleName(m[1]));
+    }
     const num = l.match(/^\s*(?:\d{1,2}[.)]|[-•])\s*(.+)/);
     if (num) add(num[1].split(/[,–—:(-]/)[0], 'list item', 3);
   }

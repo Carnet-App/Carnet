@@ -52,7 +52,7 @@ export default function Crew({ t, me, onClose, go }) {
     navigator.share ? navigator.share({ text }).catch(() => {}) : navigator.clipboard.writeText(text).then(() => setMsg('Copied.'));
   }
   async function findStay() {
-    setStayRes(await findVenue(`${stayQ} ${trip.city}`, trip.center_lat ? { lat: trip.center_lat, lng: trip.center_lng } : null).catch(() => []));
+    setStayRes(await findVenue(`${stayQ} ${trip.city}`, trip.center_lat ? { lat: trip.center_lat, lng: trip.center_lng } : null, null, { google: true, fillNames: true, name: stayQ, city: trip.city }).catch(() => []));
   }
   function addStay(r) {
     upsert('stays', { id: uid(), trip_id: trip.id, name: r.name, address: r.address || null, lat: r.lat ?? null, lng: r.lng ?? null, from_date: stayDates.from, to_date: stayDates.to });

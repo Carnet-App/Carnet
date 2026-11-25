@@ -23,7 +23,7 @@ export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
   const fromGuide = places.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase())).slice(0, 6);
   async function search() {
     const near = trip.center_lat ? { lat: trip.center_lat, lng: trip.center_lng } : null;
-    setRes(await findVenue(q + ' ' + trip.city, near).catch(() => []));
+    setRes(await findVenue(q + ' ' + trip.city, near, null, { google: true, fillNames: true, name: q, city: trip.city }).catch(() => []));
   }
   function usePlace(p, fromSearch) {
     let place_id = p.id;

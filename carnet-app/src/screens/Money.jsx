@@ -1,9 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Seg, Icon, Avatar } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
-import { balances, simplify, pairwise, itemShares } from '../lib/money';
+import { simplify, pairwise, itemShares, ledgers } from '../lib/money';
 import { toMinor, fromMinor, evenMinor, allocate, sharesValid, expenseFields } from '../lib/minor';
-import { splitInputs } from '../lib/receipt';
+import { splitInputs, checkTotal } from '../lib/receipt';
 import { parseReceipt } from '../lib/receipt';
 import { loadImage, toCanvas, readReceipt, thumbBlob } from '../lib/capture';
 import { storeFile } from '../lib/files';
@@ -18,30 +18,36 @@ export default function Money({ t, me }) {
   const [simp, setSimp] = useState(() => localStorage.getItem('carnet-simplify') !== 'no');
   const [add, setAdd] = useState(null);
   const [scan, setScan] = useState(false);
-  const net = useMemo(() => balances(expenses, settlements), [expenses, settlements]);
-  const transfers = simp ? simplify(net) : pairwise(expenses, settlements);
-  const total = expenses.reduce((a, e) => a + +e.amount, 0);
-  const myShare = expenses.reduce((a, e) => a + (+e.shares?.[me] || 0), 0);
+  // One ledger per currency (F5): a €10 debt and a £10 debt never cancel out.
+  const books = useMemo(() => ledgers(expenses, settlements, cur).map((l) => ({
+    ...l,
+    transfers: (simp ? simplify(l.net) : pairwise(l.expenses, l.settlements)).map((x) => ({ ...x, currency: l.currency })),
+    mine: l.expenses.reduce((a, e) => a + (+e.shares?.[me] || 0), 0),
+  })), [expenses, settlements, cur, simp, me]);
+  const head = books[0] || { currency: cur, total: 0, mine: 0 };
+  const transfers = books.flatMap((l) => l.transfers);
   const name = (e) => (e === me ? 'You' : nameOf(members, e));
 
   // One tap, one settlement: a repeat tap on the same transfer while it saves does nothing.
   const paying = useRef(new Set());
   function markPaid(x) {
-    const key = `${x.from}|${x.to}|${toMinor(x.amount, cur)}`;
+    const c = x.currency || cur;
+    const key = `${x.from}|${x.to}|${c}|${toMinor(x.amount, c)}`;
     if (paying.current.has(key)) return;
-    if (!confirm(`Mark ${money(x.amount, cur)} from ${name(x.from)} to ${name(x.to)} as paid?`)) return;
+    if (!confirm(`Mark ${money(x.amount, c)} from ${name(x.from)} to ${name(x.to)} as paid?`)) return;
     paying.current.add(key);
     setTimeout(() => paying.current.delete(key), 4000);
     const id = uid();
     upsert('settlements', { id, client_key: id, trip_id: trip.id, from_email: x.from, to_email: x.to, amount: x.amount,
-      currency: cur, amount_minor: toMinor(x.amount, cur), schema_version: 2 });
+      currency: c, amount_minor: toMinor(x.amount, c), schema_version: 2 });
   }
 
   return (
     <div className="page">
       <div className="between" style={{ alignItems: 'flex-end' }}>
         <div><div className="k amber">{trip.name} · {members.length} of you</div><h1 className="h1">Expenses</h1></div>
-        <div style={{ textAlign: 'right' }}><div style={{ font: '500 24px/1 var(--serif)' }}>{money(total, cur)}</div><div className="s">your share {money(myShare, cur)}</div></div>
+        <div style={{ textAlign: 'right' }}><div style={{ font: '500 24px/1 var(--serif)' }}>{money(head.total, head.currency)}</div><div className="s">your share {money(head.mine, head.currency)}</div>
+          {books.slice(1).map((l) => <div key={l.currency} className="s">+ {money(l.total, l.currency)} · yours {money(l.mine, l.currency)}</div>)}</div>
       </div>
       <div className="row">
         <button className="btn grow" onClick={() => setScan(true)}><Icon n="receipt" size={18} color="#F3EEE6" />Scan a receipt</button>
@@ -56,15 +62,20 @@ export default function Money({ t, me }) {
             <input type="checkbox" checked={simp} onChange={(e) => { setSimp(e.target.checked); localStorage.setItem('carnet-simplify', e.target.checked ? 'yes' : 'no'); }} style={{ width: 20, height: 20, accentColor: '#E2B36A' }} />
           </label>
         </div>
-        {transfers.map((x, i) => (
+        {books.filter((l) => l.transfers.length).map((l) => (
+          <div key={l.currency} className="col" style={{ gap: 8 }}>
+            {books.length > 1 && <div className="s" style={{ color: '#B7AC9C' }}>In {l.currency}</div>}
+            {l.transfers.map((x, i) => (
           <div key={i} className="row" style={{ background: '#2B2621', borderRadius: 12, padding: '8px 10px' }}>
             <div className="grow" style={{ font: '500 13px var(--sans)' }}>{name(x.from)} → {name(x.to)}</div>
-            <div style={{ font: '500 18px var(--serif)' }}>{money(x.amount, cur)}</div>
+            <div style={{ font: '500 18px var(--serif)' }}>{money(x.amount, x.currency)}</div>
             <button className="btn sm" style={{ background: 'transparent', border: '1px solid #5A5148' }} onClick={() => markPaid(x)}>Paid</button>
+          </div>
+            ))}
           </div>
         ))}
         {!transfers.length && <div className="s" style={{ color: '#B7AC9C' }}>{expenses.length ? 'Everyone’s square.' : 'Nothing to settle yet.'}</div>}
-        {transfers.length > 0 && <div className="s" style={{ color: '#B7AC9C' }}>{simp ? 'Fewest transfers — everyone still ends up exactly square.' : 'Who owes whom, netted pair by pair.'}</div>}
+        {transfers.length > 0 && <div className="s" style={{ color: '#B7AC9C' }}>{simp ? 'Fewest transfers — everyone still ends up exactly square.' : 'Who owes whom, netted pair by pair.'}{books.length > 1 ? ' Each currency is settled on its own, with no conversion.' : ''}</div>}
       </div>
 
       <div className="card" style={{ padding: '2px 14px' }}>
@@ -217,6 +228,8 @@ function ReceiptSplit({ t, me, onClose }) {
     result = { shares: allocate(total, weights), total };
   }
   const shown = (m) => fromMinor(m || 0, cur);
+  // Checked again on every edit (F3): fixing a misread line can turn a difference into a match.
+  const check = r ? checkTotal(r.printedTotal != null ? toMinor(r.printedTotal, cur) : null, toMinor(sub, cur), adjMinor.reduce((a, x) => a + x.minor, 0), adjustments.length ? null : r.servicePct) : null;
   const unassigned = mode === 'item' && lines.some((l) => !l.who.length);
 
   // Locked from the first tap: the photo upload takes a moment and a second tap used to add the bill twice (F8).
@@ -226,9 +239,8 @@ function ReceiptSplit({ t, me, onClose }) {
     setSending(true);
     const path = thumb ? await storeFile(thumb, { tripId: t.trip.id }).catch(() => null) : null;
     notify(t.trip.id, { title: `${nameOf(t.members, me)} split ${title || 'the bill'}`, body: `${money(shown(result.total), cur)} · see your share`, tag: 'money' });
-    // Reconciled only if the lines weren't changed after reading a matching printed total.
-    const edited = JSON.stringify(lines.map((l) => [l.name, toMinor(l.price, cur)])) !== JSON.stringify((r?.lines || []).filter((l) => !l.service).map((l) => [l.name, toMinor(l.price, cur)]));
-    const validation = !r?.validation ? 'manual' : edited ? 'manual' : r.validation;
+    // Typed in by hand: nothing to check against. Otherwise the check as it stands at submit.
+    const validation = !r?.validation ? 'manual' : check.status;
     upsert('expenses', {
       id, client_key: id, trip_id: t.trip.id, title: title || 'Dinner', payer_email: payer,
       method: { item: 'per item, from receipt', even: 'evenly, from receipt', pct: 'by %, from receipt' }[mode],
@@ -306,9 +318,10 @@ function ReceiptSplit({ t, me, onClose }) {
               {[0, 5, 10, 12.5].map((x) => <button key={x} className={'chip' + (tip === x ? ' on' : '')} style={{ padding: '7px 9px', fontSize: 12 }} onClick={() => setTip(x)}>{x ? x + '%' : 'None'}</button>)}
             </div>
           </div>
-          {r.validation === 'difference' && <div className="card dashed s">The receipt’s total says {money(r.printedTotal, cur)}, the lines add up to {money(r.sum, cur)}. Check for a missed or misread line.</div>}
+          {r.validation && check.status === 'difference' && <div className="card dashed s">The receipt’s total says {money(r.printedTotal, cur)}; the lines and service come to {money(r.printedTotal - shown(check.diff), cur)}, {money(Math.abs(shown(check.diff)), cur)} {check.diff > 0 ? 'short' : 'over'}. Check for a missed or misread line — nobody’s share absorbs the gap.</div>}
+          {r.validation && check.status === 'reconciled' && r.lines?.length > 0 && <div className="s">✓ Adds up to the receipt’s total of {money(r.printedTotal, cur)}.</div>}
           {r.validation && !r.lines?.length && <div className="card dashed s">Couldn’t pick out any prices. A straight, flat photo of the paper receipt (not a screenshot) works best — or add the lines yourself.</div>}
-          {r.validation === 'unverified' && r.lines?.length > 0 && <div className="card dashed s">No total found on the receipt, so these lines couldn’t be checked against it. Worth a quick look.</div>}
+          {r.validation && check.status === 'unverified' && r.lines?.length > 0 && <div className="card dashed s">No total found on the receipt, so these lines couldn’t be checked against it. Worth a quick look.</div>}
           <div className="card dark col">
             <div className="between"><span className="k" style={{ color: 'var(--gold)' }}>Total {money(shown(result.total), cur)}</span>{tip ? <span className="s" style={{ color: '#B7AC9C' }}>incl. {tip}% tip</span> : null}</div>
             <div className="row wrap">

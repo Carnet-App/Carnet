@@ -49,10 +49,10 @@ test('defect 3: a Maps card does not hide another venue on the same screen', () 
   const c = venueCandidates('Septime\n4.6 ★★★★★ (1,203)\nRestaurant · €€€\nAlso try Clamato, 80 Rue de Charonne, 75011 Paris');
   assert.ok(names(c).includes('Septime') && names(c).includes('Clamato'));
 });
-test('defect 4: a shared word is not a 0.85 match', { todo: 'defect 4 — substring bonus in similarity() (phase 2)' }, () => {
+test('defect 4: a shared word is not a 0.85 match', () => {
   assert.ok(similarity('Paris', 'Université Paris I Panthéon-Sorbonne') < 0.5);
 });
-test('defect 5: "lecornichon paris" is not offered a university', { todo: 'defect 5 — 0.35 acceptance threshold (phase 2)' }, () => {
+test('defect 5: "lecornichon paris" is not offered a university', () => {
   assert.ok(similarity('lecornichon paris', 'Université Paris I Panthéon-Sorbonne') < 0.35);
 });
 test('defect 11: "travel" is not a rave and "public" is not a pub', () => {

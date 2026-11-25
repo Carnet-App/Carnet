@@ -4,7 +4,7 @@ import worker from '../../worker/index.js';
 
 const photon = (features) => async () => new Response(JSON.stringify({ features }), { headers: { 'content-type': 'application/json' } });
 
-test('defect 7: a nameless map result stays nameless', { todo: 'defect 7 — worker fills a missing name with the search text (phase 2)' }, async () => {
+test('defect 7: a nameless map result stays nameless', async () => {
   globalThis.fetch = photon([{ properties: { street: 'Rue de Beauce', housenumber: '8', city: 'Paris', osm_value: 'house' }, geometry: { coordinates: [2.36, 48.86] } }]);
   try {
     const res = await worker.fetch(new Request('https://x/api/geo?q=Rojo%20Paris'), { SUPABASE_URL: 'x', SUPABASE_KEY: 'x' }, {});

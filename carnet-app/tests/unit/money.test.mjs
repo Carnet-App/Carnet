@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { balances, simplify, evenShares, itemShares, pairwise } from '../../src/lib/money.js';
+import { balances, simplify, evenShares, itemShares, pairwise, ledgers } from '../../src/lib/money.js';
 import { allocate, evenMinor, sharesValid, splitItems, toMinor } from '../../src/lib/minor.js';
 
 const cents = (o) => Object.values(o).reduce((a, b) => a + Math.round(b * 100), 0);
@@ -38,13 +38,17 @@ test('balances net to zero and simplified transfers settle everyone', () => {
   assert.ok(pairwise(ex).length >= 1);
 });
 
-test('F5: different currencies are never added together', { todo: 'F5 — balances() ignores currency (fix: per-currency ledger, phase 2)' }, () => {
-  const net = balances([
+test('F5: different currencies are never added together', () => {
+  const ex = [
     { payer_email: 'a@x', amount: 10, currency: 'EUR', shares: { 'b@x': 10 } },
     { payer_email: 'b@x', amount: 10, currency: 'GBP', shares: { 'a@x': 10 } },
-  ]);
-  // Today this nets to zero: €10 owed one way cancels £10 the other.
-  assert.notDeepEqual(net, { 'a@x': 0, 'b@x': 0 });
+  ];
+  const ls = ledgers(ex, [{ from_email: 'b@x', to_email: 'a@x', amount: 10 }], 'EUR');
+  const by = Object.fromEntries(ls.map((l) => [l.currency, l.net]));
+  // €10 owed one way and £10 the other: two debts, not zero. The payment with no currency is the trip's (EUR).
+  assert.deepEqual(by.EUR, { 'a@x': 0, 'b@x': 0 });
+  assert.deepEqual(by.GBP, { 'b@x': 10, 'a@x': -10 });
+  assert.equal(ls[0].currency, 'EUR', "the trip's currency comes first");
 });
 
 test('F7: custom shares that do not add up are refused', () => {

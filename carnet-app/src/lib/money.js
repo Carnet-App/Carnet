@@ -72,3 +72,16 @@ export function itemShares(lines, tipPct = 0, _payer, cur = 'EUR', adjustments =
     minor: r,
   };
 }
+
+// One ledger per currency: amounts in different currencies are never added together or netted
+// against each other (no conversion). Rows with no currency (older payments) use the trip's.
+export function ledgers(expenses, settlements = [], fallback = 'EUR') {
+  const cur = (x) => String(x.currency || fallback).toUpperCase();
+  const out = new Map();
+  const get = (c) => out.get(c) || out.set(c, { currency: c, expenses: [], settlements: [] }).get(c);
+  for (const e of expenses) get(cur(e)).expenses.push(e);
+  for (const s of settlements) get(cur(s)).settlements.push(s);
+  // The trip's own currency first, then the rest by how much was spent in them.
+  return [...out.values()].map((l) => ({ ...l, net: balances(l.expenses, l.settlements), total: l.expenses.reduce((a, e) => a + +e.amount, 0) }))
+    .sort((a, b) => (b.currency === fallback.toUpperCase()) - (a.currency === fallback.toUpperCase()) || b.expenses.length - a.expenses.length);
+}

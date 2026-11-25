@@ -40,6 +40,7 @@ export async function loadApp({ model = process.env.CARNET_OCR_MODEL || 'app' } 
     .replace('const toInput = (img) => img;', "const toInput = (img) => (img.toBuffer ? img.toBuffer('image/png') : img);");
   writeFileSync(path.join(out, 'capture.js'), cap);
   writeFileSync(path.join(out, 'receipt.js'), readFileSync(path.join(APP, 'src/lib/receipt.js'), 'utf8'));
+  writeFileSync(path.join(out, 'match.js'), readFileSync(path.join(APP, 'src/lib/match.js'), 'utf8'));
   const capture = await import(pathToFileURL(path.join(out, 'capture.js')).href);
   const receipt = await import(pathToFileURL(path.join(out, 'receipt.js')).href);
   return { capture, receipt };

@@ -80,3 +80,13 @@ export function splitInputs(r) {
     tipPct: r.serviceIncluded || adjustments.length ? 0 : r.servicePct || 0,
   };
 }
+
+// The receipt's own total against the lines as they stand now (after any edits), in minor units.
+// reconciled: they agree · unverified: no total was read · difference: they don't, by `diff`.
+export function checkTotal(printedMinor, itemsMinor, adjustmentsMinor = 0, servicePct = null) {
+  if (printedMinor == null) return { status: 'unverified', diff: null };
+  const plain = itemsMinor + adjustmentsMinor;
+  if (Math.abs(printedMinor - plain) <= 1) return { status: 'reconciled', diff: 0 };
+  if (!adjustmentsMinor && servicePct && Math.abs(printedMinor - Math.round(itemsMinor * (1 + servicePct / 100))) <= 2) return { status: 'reconciled', diff: 0 };
+  return { status: 'difference', diff: printedMinor - plain };
+}

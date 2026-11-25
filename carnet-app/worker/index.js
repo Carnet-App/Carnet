@@ -57,7 +57,7 @@ async function geo(url) {
     const rows = await r2.json();
     return json({
       results: rows.map((x) => ({
-        name: x.name || x.display_name.split(',')[0],
+        name: x.name || null,
         lat: +x.lat, lng: +x.lon,
         address: x.display_name.split(',').slice(1, 4).join(',').trim(),
         city: x.address?.city || x.address?.town || x.address?.village || '',
@@ -71,7 +71,7 @@ async function geo(url) {
       .filter(Boolean)
       .join(' ');
     return {
-      name: pr.name || pr.street || q,
+      name: pr.name || null, // a house or a street has no name of its own: don't invent one
       lat: f.geometry.coordinates[1],
       lng: f.geometry.coordinates[0],
       address: addr,
