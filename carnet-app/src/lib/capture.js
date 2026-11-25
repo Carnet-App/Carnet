@@ -147,6 +147,8 @@ const MONTH = /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z]*\b/
 function junk(name) {
   const letters = (name.match(/\p{L}/gu) || []).length;
   if (letters < 3) return true;
+  // OCR noise ("3 ibd", "oO m6"): a real name has a proper word in it.
+  if (!/\p{L}{4,}/u.test(name) && !/\p{Lu}{3,}/u.test(name)) return true;
   if (/\d{1,2}[:h.]\d{2}/.test(name)) return true;               // times
   if (/^\d/.test(name) && MONTH.test(name)) return true;           // dates
   if (/^(\d+\s*)+(min|hr|h|km|m|mi)\b/i.test(name)) return true; // distances

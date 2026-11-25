@@ -97,6 +97,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       const scored = matches
         .map((m) => ({ ...m, sim: similarity(c.name, m.name), far: near && distM(near, m) > 25000 }))
         .filter((m) => !m.far && !/^(city|town|village|country|state|county|administrative|region|province|postcode|suburb|neighbourhood|quarter|district|locality|political)$/.test(m.osm_value || ''))
+        .filter((m) => m.sim >= 0.35) // don't offer unrelated places that merely came back from the search
         .sort((a, b) => b.sim - a.sim);
       const best = scored[0];
       // Confident only if the name really matches and it's in this city.
@@ -194,6 +195,32 @@ function TicketForm({ t: given, me, r, onDone, onNotTicket }) {
   );
 }
 
+// "None of these": type the real name and search again.
+function FixName({ v, city, near, onFound }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState('');
+  const [busy, setBusy] = useState(false);
+  async function go() {
+    const name = q.trim();
+    if (!name) return;
+    setBusy(true);
+    const res = navigator.onLine ? await findVenue(`${name} ${city || ''}`.trim(), near).catch(() => []) : [];
+    const scored = res.map((m) => ({ ...m, sim: similarity(name, m.name) })).sort((a, b) => b.sim - a.sim).slice(0, 3);
+    const sure = scored[0]?.sim >= 0.8;
+    onFound({ cand: { ...v.cand, name, why: 'typed by you' }, options: scored, pick: sure ? 0 : null, keep: true, sure: false });
+    setBusy(false);
+    setOpen(false);
+  }
+  if (!open)
+    return <button className="chip" style={{ fontSize: 12, marginLeft: 32, alignSelf: 'flex-start' }} onClick={() => setOpen(true)}>✎ None of these — type the name</button>;
+  return (
+    <div className="row" style={{ paddingLeft: 32, gap: 8 }}>
+      <input className="in grow" autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && go()} placeholder="e.g. Le Syndicat" />
+      <button className="btn" disabled={busy || !q.trim()} onClick={go}>{busy ? '…' : 'Find'}</button>
+    </div>
+  );
+}
+
 function VenueReview({ t, r, setR, onDone }) {
   const [city, setCity] = useState(t?.trip.city || r.city || '');
   const [alsoTrip, setAlsoTrip] = useState(!!t);
@@ -242,6 +269,7 @@ function VenueReview({ t, r, setR, onDone }) {
                   </div>
                 </div>
               </label>
+              {!v.sure && <FixName v={v} city={city} near={t?.trip.center_lat ? { lat: t.trip.center_lat, lng: t.trip.center_lng } : null} onFound={(patch) => upd(i, patch)} />}
               {!v.sure && v.options.length > 0 && (
                 <div className="chips" style={{ paddingLeft: 32 }}>
                   {v.options.map((o, k) => (
