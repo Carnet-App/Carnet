@@ -195,7 +195,7 @@ function ReceiptSplit({ t, me, onClose }) {
         <>
           <h1 className="h1" style={{ fontSize: 30 }}>Photograph the bill</h1>
           <button className="btn block" onClick={() => fileRef.current.click()}><Icon n="camera" color="#F3EEE6" size={18} />Take or choose a photo</button>
-          <input ref={fileRef} type="file" accept="image/*" capture="environment" hidden onChange={(e) => read(e.target.files[0])} />
+          <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => read(e.target.files[0])} />
           <div className="s">Read on your phone — works with no signal. Flat, well-lit and the whole receipt in frame works best.</div>
           <button className="btn ghost block" onClick={() => { setR({ lines: [], serviceIncluded: false }); setLines([{ name: '', price: '', who: [...emails] }]); }}>Type the items in instead</button>
           {busy && <div className="s">{busy}</div>}
