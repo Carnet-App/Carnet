@@ -14,8 +14,30 @@ async function ocrWorker() {
         workerBlobURL: false,
       });
     })();
+    // A failed start (offline before the models were cached, say) must not fail every later read.
+    workerP.catch(() => { workerP = null; });
   }
   return workerP;
+}
+
+// Every read goes through one queue and sets its whole profile, so one read's settings can
+// never leak into the next (before this, the first screenshot of a session read differently).
+export const OCR_PROFILES = {
+  document: { tessedit_pageseg_mode: '3', preserve_interword_spaces: '0' },
+  rows: { tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' },
+  line: { tessedit_pageseg_mode: '7', preserve_interword_spaces: '0' },
+};
+const toInput = (img) => img; // the test harness swaps this for a PNG buffer
+let ocrQueue = Promise.resolve();
+export function recognise(img, profile = 'document') {
+  const job = ocrQueue.then(async () => {
+    const w = await ocrWorker();
+    await w.setParameters(OCR_PROFILES[profile]);
+    const { data } = await w.recognize(toInput(img), {}, { text: true, blocks: true });
+    return data;
+  });
+  ocrQueue = job.catch(() => undefined); // a failed read doesn't block the ones after it
+  return job;
 }
 
 export async function loadImage(fileOrBlob) {
@@ -45,12 +67,11 @@ export function readQR(canvas) {
 }
 
 export async function readText(canvasOrImg, onProgress) {
-  const w = await ocrWorker();
-  const { data } = await w.recognize(canvasOrImg, {}, { text: true, blocks: true });
+  const data = await recognise(canvasOrImg, 'document');
   onProgress?.(1);
   const lines = [];
   for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || [])
-    lines.push({ text: (l.text || '').trim(), y: l.bbox.y0, h: l.bbox.y1 - l.bbox.y0, conf: l.confidence });
+    lines.push({ text: (l.text || '').trim(), y: l.bbox.y0, h: l.bbox.y1 - l.bbox.y0, x: l.bbox.x0, w: l.bbox.x1 - l.bbox.x0, conf: l.confidence });
   return { text: data.text || '', lines, height: canvasOrImg.height || 1 };
 }
 
@@ -120,14 +141,8 @@ function prepared(src, box, angle, width) {
   return c;
 }
 async function readRows(canvas) {
-  const w = await ocrWorker();
-  await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' }); // one block of rows
-  try {
-    const { data } = await w.recognize(canvas.toBuffer ? canvas.toBuffer('image/png') : canvas);
-    return { text: data.text || '', conf: data.confidence || 0 };
-  } finally {
-    await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '0' });
-  }
+  const data = await recognise(canvas, 'rows'); // one block of rows
+  return { text: data.text || '', conf: data.confidence || 0 };
 }
 const priceCount = (t) => (t.match(/[£€$]?\s?\d{1,4}[.,]\d{2}\b/g) || []).length;
 export async function readReceipt(src, onProgress) {
@@ -299,25 +314,19 @@ export async function readOverlay(canvas, box) {
   const extra = [];
   const todo = bands.filter(([a, b]) => !full.some((l) => l.conf > 80 && l.y < b && l.y + l.h > a)).slice(0, 8);
   if (todo.length) {
-    const w = await ocrWorker();
-    await w.setParameters({ tessedit_pageseg_mode: '7' }); // one line of text
-    try {
-      for (const [a, b] of todo) {
-        const pad = 8, top = Math.max(0, a - pad), hh = Math.min(c.height, b + pad) - top;
-        const k = 64 / hh;
-        const bc = document.createElement('canvas');
-        bc.width = Math.round(c.width * k) + 40;
-        bc.height = 94;
-        const bg = bc.getContext('2d');
-        bg.fillStyle = '#fff';
-        bg.fillRect(0, 0, bc.width, bc.height);
-        bg.drawImage(c, 0, top, c.width, hh, 20, 15, c.width * k, 64);
-        const { data } = await w.recognize(bc);
-        const t = (data.text || '').trim();
-        if (data.confidence > 60 && /\p{L}{3,}/u.test(t)) extra.push({ text: t, y: a, h: b - a, conf: data.confidence, band: true });
-      }
-    } finally {
-      await w.setParameters({ tessedit_pageseg_mode: '3' });
+    for (const [a, b] of todo) {
+      const pad = 8, top = Math.max(0, a - pad), hh = Math.min(c.height, b + pad) - top;
+      const k = 64 / hh;
+      const bc = document.createElement('canvas');
+      bc.width = Math.round(c.width * k) + 40;
+      bc.height = 94;
+      const bg = bc.getContext('2d');
+      bg.fillStyle = '#fff';
+      bg.fillRect(0, 0, bc.width, bc.height);
+      bg.drawImage(c, 0, top, c.width, hh, 20, 15, c.width * k, 64);
+      const data = await recognise(bc, 'line'); // one line of text
+      const t = (data.text || '').trim();
+      if (data.confidence > 60 && /\p{L}{3,}/u.test(t)) extra.push({ text: t, y: a, h: b - a, conf: data.confidence, band: true });
     }
   }
   const lines = [...full, ...extra].sort((x, y) => x.y - y.y).map((l) => ({ ...l, text: l.text.replace(/^[^\p{L}\p{N}@#📍“"«<€£$]+/u, '').trim() })).filter((l) => /\p{L}{2,}/u.test(l.text));
@@ -426,14 +435,15 @@ export function captionFacts(text) {
 // Anything else on screen is only a last resort.
 const tag = (cs, where) => cs.map((c) => ({ ...c, why: `${where} · ${c.why}` }));
 export function firstLine({ post, lines, height, text }) {
-  if (post) return tag(venueCandidates(post.caption), 'caption').filter((c) => c.weight >= 2);
+  if (post) return tag(venueCandidates(post.caption, null, 1, { social: true, handle: post.handle }), 'caption').filter((c) => c.weight >= 2);
   const clean = (lines || []).filter((l) => l.conf >= 80 && l.text);
   if (!clean.length) return tag(venueCandidates(text), 'text');
   return tag(venueCandidates(clean.map((l) => l.text).join('\n'), clean, height), 'on screen');
 }
 export const isStrong = (cands) => cands.some((c) => c.weight >= 4);
+// Evidence from the screen's own text and from text inside pictures is merged, never one
+// hiding the other: a strong caption doesn't suppress a different place named on the photo.
 export function tieredCandidates(first, picture, text) {
-  if (isStrong(first)) return first;
   const pic = picture.filter((c) => c.name);
   const seen = new Set();
   const both = [...first, ...pic].filter((c) => !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase()));
@@ -448,9 +458,13 @@ export function typeHint(text) {
 // ── Understanding what came in ─────────────────────────────────────────
 const TICKET = /\b(billet|ticket|e-?ticket|booking|réservation|reservation|confirmation|order|commande|entry|admission|door|qr|scan|seat|place\s+\d)\b/i;
 
+// A QR code alone isn't a ticket (menus, wifi, loyalty cards have them): it needs booking words
+// too, or one booking word plus a date and time.
 export function looksLikeTicket(text, qr) {
-  if (qr) return true;
-  return (text.match(new RegExp(TICKET, 'gi')) || []).length >= 2;
+  const words = (text.match(new RegExp(TICKET, 'gi')) || []).length;
+  const when = /\b\d{1,2}[:h]\d{2}\b/.test(text) && (/\b\d{1,2}[\/.-]\d{1,2}([\/.-]\d{2,4})?\b/.test(text) || MONTH.test(text));
+  if (qr) return words >= 2 || (words >= 1 && when);
+  return words >= 2;
 }
 
 const MONTHS = { jan: 1, janv: 1, feb: 2, fev: 2, fév: 2, mar: 3, mars: 3, apr: 4, avr: 4, may: 5, mai: 5, jun: 6, juin: 6, jul: 7, juil: 7, aug: 8, aout: 8, août: 8, sep: 9, sept: 9, oct: 10, nov: 11, dec: 12, déc: 12 };
@@ -488,6 +502,7 @@ function junk(name) {
   if (/\d[.,]\d\s*[★*]|\(\d[\d,.]*\)/.test(name)) return true;   // ratings
   if (/€|£|\$/.test(name)) return true;
   if (UI.test(name)) return true;
+  if (/\b(password|passcode|sign in|sign up|log in|login|username|forgot|verification code)\b/i.test(name)) return true; // login and account screens
   // Article and list headlines: "Best natural wine in Paris", "10 places to eat in Berlin"
   if (/^(the\s+)?(\d+\s+)?(best|top|our|where to|guide|favou?rite|must|hidden gems?)\b/i.test(name) || /\b(places|spots|bars|restaurants)\s+(to|in|for)\b/i.test(name)) return true;
   return false;
@@ -514,7 +529,9 @@ export function splitTag(t) {
   if (!best) return cap(t);
   return [cap(t.slice(0, best.i)), ...best.ps, splitTag(t.slice(best.j))].join(' ');
 }
-export function venueCandidates(text, lines = null, height = 1) {
+// opts.social: a post layout was detected (so "account name, then a line" can be a location tag).
+// opts.handle: the post's own account name, when known.
+export function venueCandidates(text, lines = null, height = 1, opts = {}) {
   const out = [];
   const add = (name, why, weight) => {
     // OCR leaves icon debris at line ends ("ROJO oO m6 x"): drop trailing 1–2 character bits.
@@ -540,9 +557,9 @@ export function venueCandidates(text, lines = null, height = 1) {
       if (out.length) out[out.length - 1].type = typeLine.split(/[·•-]/)[0].trim();
     }
   }
-  // A Google Maps place card is about one place: don't guess at map labels around it.
-  const card = out.filter((o) => o.why === 'Google Maps place');
-  if (card.length) return card;
+  // A Maps card or a name with an address anchors the screen: weak guesses are dropped at the
+  // end, but other well-evidenced places on the same screen are kept.
+  let anchored = out.some((o) => o.why === 'Google Maps place');
 
   // "medowski.k Rojo, 8 Rue de Beauce, 75003 Paris": a name followed by a street address
   // (Instagram location tags, captions, listings). The strongest signal there is.
@@ -551,14 +568,15 @@ export function venueCandidates(text, lines = null, height = 1) {
   for (const l of all) {
     const m = l.match(addrRe);
     if (!m) continue;
-    // Handles are lowercase: "Bar Calders, 25 Carrer…" keeps "Bar".
-    const name = (m[1] && /[A-Z]/.test(m[1]) ? `${m[1]} ${m[2]}` : m[2]).trim();
+    // Only a real-looking handle is dropped ("medowski.k", "rojo_paris", or the post's own):
+    // "chez janou, 2 rue…" keeps "chez" and "Bar Calders, 25 Carrer…" keeps "Bar".
+    const isHandle = m[1] && (/[._\d]/.test(m[1]) || (opts.handle && m[1].toLowerCase() === opts.handle.toLowerCase()));
+    const name = (m[1] && !isHandle ? `${m[1]} ${m[2]}` : m[2]).replace(/^(also try|try|visit|check out|go to|head to)\s+/i, '').trim();
     add(name, 'name + address', 15);
     const hit = out.find((o) => o.why === 'name + address' && !o.address);
     if (hit) hit.address = m[3].replace(/\s+/g, ' ').trim();
   }
-  const addressed = out.filter((o) => o.why === 'name + address');
-  if (addressed.length) return addressed;
+  anchored ||= out.some((o) => o.why === 'name + address');
 
   // Instagram location tag: "victoiretaverne 📍 Les Puces de Vanves, Porte de Vanves, Paris"
   // (the pin often reads as junk like "Ÿ").
@@ -582,8 +600,9 @@ export function venueCandidates(text, lines = null, height = 1) {
     const num = l.match(/^\s*(?:\d{1,2}[.)]|[-•])\s*(.+)/);
     if (num) add(num[1].split(/[,–—:(-]/)[0], 'list item', 3);
   }
-  // Instagram: the location tag sits on the line right under the account name.
-  if (!isMaps)
+  // Instagram: the location tag sits on the line right under the account name. Only on a
+  // screen already recognised as a social post; elsewhere "username / Forgot your password" isn't a place.
+  if (!isMaps && opts.social)
     for (let i = 0; i < Math.min(all.length - 1, 12); i++) {
       if (/^[a-z0-9._]{3,30}$/i.test(all[i]) && all[i + 1] && all[i + 1].length < 45 && !/\d{2}:\d{2}/.test(all[i + 1]))
         add(all[i + 1].split(',')[0], 'location tag', 4);
@@ -601,7 +620,8 @@ export function venueCandidates(text, lines = null, height = 1) {
     for (const l of all.slice(0, 40)) {
       if (l.length <= 32 && /^[A-ZÀ-Ý0-9][\p{L}0-9'’&\- ]+$/u.test(l) && l.split(' ').length <= 5) add(l, 'heading', 1);
     }
-  return out.sort((a, b) => b.weight - a.weight).slice(0, 8);
+  const kept = anchored ? out.filter((o) => o.weight >= 3) : out;
+  return kept.sort((a, b) => b.weight - a.weight).slice(0, 8);
 }
 
 export function areaHint(text) {

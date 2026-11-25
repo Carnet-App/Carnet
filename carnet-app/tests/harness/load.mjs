@@ -37,8 +37,7 @@ export async function loadApp({ model = process.env.CARNET_OCR_MODEL || 'app' } 
     .replace("import jsQR from 'jsqr';", `import jsQR from ${JSON.stringify(pathToFileURL(req.resolve('jsqr')).href)};`)
     .replace('workerBlobURL: false,', "cacheMethod: 'none',") // never reuse a model cached by an earlier run
     .replaceAll("document.createElement('canvas')", 'globalThis.__mkCanvas()')
-    .replace('await w.recognize(canvasOrImg, ', "await w.recognize(canvasOrImg.toBuffer ? canvasOrImg.toBuffer('image/png') : canvasOrImg, ")
-    .replace('await w.recognize(bc)', "await w.recognize(bc.toBuffer('image/png'))");
+    .replace('const toInput = (img) => img;', "const toInput = (img) => (img.toBuffer ? img.toBuffer('image/png') : img);");
   writeFileSync(path.join(out, 'capture.js'), cap);
   writeFileSync(path.join(out, 'receipt.js'), readFileSync(path.join(APP, 'src/lib/receipt.js'), 'utf8'));
   const capture = await import(pathToFileURL(path.join(out, 'capture.js')).href);

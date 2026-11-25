@@ -38,14 +38,14 @@ test('post layout falls back to the caption when the like row is misread', () =>
 });
 
 // ── Known defects (capture defect numbers from the plan)
-test('defect 1: a strong caption candidate does not hide places read from the photo', { todo: 'defect 1 — tieredCandidates returns early (phase 1)' }, () => {
+test('defect 1: a strong caption candidate does not hide places read from the photo', () => {
   const out = tieredCandidates([{ name: 'Rojo', why: 'caption', weight: 15 }], [{ name: 'Septime', why: 'photo', weight: 8 }], '');
   assert.deepEqual(names(out).sort(), ['Rojo', 'Septime']);
 });
-test('defect 2: a login screen is not read as a location tag', { todo: 'defect 2 — username-then-line rule runs on any document (phase 1)' }, () => {
+test('defect 2: a login screen is not read as a location tag', () => {
   assert.deepEqual(names(venueCandidates('username\nForgot your password')), []);
 });
-test('defect 3: a Maps card does not hide another venue on the same screen', { todo: 'defect 3 — early return for Maps cards (phase 1)' }, () => {
+test('defect 3: a Maps card does not hide another venue on the same screen', () => {
   const c = venueCandidates('Septime\n4.6 ★★★★★ (1,203)\nRestaurant · €€€\nAlso try Clamato, 80 Rue de Charonne, 75011 Paris');
   assert.ok(names(c).includes('Septime') && names(c).includes('Clamato'));
 });
@@ -55,13 +55,13 @@ test('defect 4: a shared word is not a 0.85 match', { todo: 'defect 4 — substr
 test('defect 5: "lecornichon paris" is not offered a university', { todo: 'defect 5 — 0.35 acceptance threshold (phase 2)' }, () => {
   assert.ok(similarity('lecornichon paris', 'Université Paris I Panthéon-Sorbonne') < 0.35);
 });
-test('defect 11: "travel" is not a rave and "public" is not a pub', { todo: 'defect 11 — substring category rules (phase 1)' }, () => {
+test('defect 11: "travel" is not a rave and "public" is not a pub', () => {
   assert.equal(guessCategory('', 'Paris travel guide'), 'explore');
   assert.equal(guessCategory('', 'public garden'), 'explore');
 });
-test('defect 14: a lowercase name keeps its first word', { todo: 'defect 14 — address rule reads the first word as a username (phase 1)' }, () => {
+test('defect 14: a lowercase name keeps its first word', () => {
   assert.deepEqual(names(venueCandidates('chez janou, 2 rue roger verlomme, 75003 paris')), ['chez janou']);
 });
-test('defect 17: a QR code alone does not make a ticket', { todo: 'defect 17 — any QR code means ticket (phase 1)' }, () => {
+test('defect 17: a QR code alone does not make a ticket', () => {
   assert.equal(looksLikeTicket('Menu of the day\nScan for our wine list', { data: 'https://example.com/wine' }), false);
 });

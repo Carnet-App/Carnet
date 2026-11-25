@@ -12,15 +12,38 @@ export const CATS = {
 };
 export const cat = (c) => CATS[c] || CATS.other;
 
-// Map tags from OpenStreetMap / Google to our categories.
+// Map tags from OpenStreetMap / Google to our categories: an exact tag wins outright.
+const TAG_CAT = {
+  nightclub: 'dance', night_club: 'dance', dance: 'dance',
+  bar: 'drink', pub: 'drink', biergarten: 'drink', wine_bar: 'drink', brewery: 'drink', cocktail_bar: 'drink', wine: 'drink',
+  cafe: 'coffee', coffee: 'coffee', coffee_shop: 'coffee', bakery: 'coffee', pastry: 'coffee', tea: 'coffee',
+  restaurant: 'eat', fast_food: 'eat', food_court: 'eat', ice_cream: 'eat', meal_takeaway: 'eat', meal_delivery: 'eat', deli: 'eat',
+  museum: 'culture', gallery: 'culture', art_gallery: 'culture', arts_centre: 'culture', theatre: 'culture', cinema: 'culture',
+  movie_theater: 'culture', concert_hall: 'culture', library: 'culture',
+  attraction: 'explore', tourist_attraction: 'explore', viewpoint: 'explore', park: 'explore', garden: 'explore', marketplace: 'explore',
+};
+// Words and phrases from the text, matched as whole words ("travel" is not "rave", "public" is not
+// "pub", "Clubcard" is not "club"), each with a weight; the highest total wins.
+const CAT_WORDS = {
+  dance: [['nightclub', 3], ['night club', 3], ['club', 2], ['techno', 2], ['rave', 2], ['dancefloor', 2], ['dj', 1], ['house music', 2], ['party', 1]],
+  drink: [['bar', 2], ['wine bar', 3], ['pub', 2], ['natural wine', 2], ['cocktail', 2], ['cocktails', 2], ['biergarten', 3], ['brewery', 2], ['taproom', 2], ['cave', 1], ['wine', 1], ['drinks', 1]],
+  coffee: [['coffee', 2], ['café', 2], ['cafe', 2], ['bakery', 2], ['boulangerie', 2], ['patisserie', 2], ['pâtisserie', 2], ['espresso', 2], ['brunch', 1]],
+  eat: [['restaurant', 3], ['bistro', 2], ['bistrot', 2], ['bistrosteria', 2], ['brasserie', 2], ['trattoria', 2], ['osteria', 2], ['food', 1], ['dinner', 1], ['dinners', 1], ['lunch', 1], ['pizza', 2], ['ramen', 2], ['tapas', 2], ['dishes', 1], ['chefs', 1], ['menu', 1], ['seafood', 2], ['small plates', 2], ['steak', 1]],
+  culture: [['museum', 3], ['gallery', 2], ['galerie', 2], ['theatre', 2], ['théâtre', 2], ['cinema', 2], ['cinéma', 2], ['exhibition', 2], ['expo', 2], ['art', 1], ['concert', 2], ['opera', 2], ['opéra', 2]],
+};
+const wordRe = (w) => new RegExp(`(?<![\\p{L}\\p{N}])${w.replace(/ /g, '\\s+')}(?![\\p{L}\\p{N}])`, 'iu');
+const CAT_RES = Object.fromEntries(Object.entries(CAT_WORDS).map(([c, ws]) => [c, ws.map(([w, n]) => [wordRe(w), n])]));
+export function categoryScores(text = '') {
+  const out = {};
+  for (const [c, ws] of Object.entries(CAT_RES)) for (const [re, n] of ws) if (re.test(text)) out[c] = (out[c] || 0) + n;
+  return out;
+}
 export function guessCategory(tag = '', text = '') {
-  const s = (tag + ' ' + text).toLowerCase();
-  if (/nightclub|club|techno|rave|dance|party/.test(s)) return 'dance';
-  if (/coffee|café|cafe|bakery|boulangerie|brunch/.test(s)) return 'coffee';
-  if (/\bbar\b|pub|wine|cave|cocktail|biergarten|drink/.test(s)) return 'drink';
-  if (/restaurant|bistro|brasserie|food|fast_food|\beat\b|dinner|lunch|pizza|ramen|tapas/.test(s)) return 'eat';
-  if (/museum|gallery|galerie|theatre|théâtre|cinema|cinéma|cinémathèque|arts_centre|exhibition|expo|\bart\b|concert|opera|opéra/.test(s)) return 'culture';
-  return 'explore';
+  const t = String(tag || '').toLowerCase();
+  if (TAG_CAT[t]) return TAG_CAT[t];
+  const scores = categoryScores(`${tag || ''} ${text || ''}`);
+  const best = Object.entries(scores).sort((a, b) => b[1] - a[1])[0];
+  return best ? best[0] : 'explore';
 }
 
 // ── Dates & times ─────────────────────────────────────────────────────

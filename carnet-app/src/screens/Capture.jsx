@@ -114,7 +114,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         lines: compactLines(p.lines), overlay: compactLines(p.overlayLines), first: p.first, photoText: p.pic })),
       lookups: [],
     };
-    if (pages.length === 1 && looksLikeTicket(one.text, one.qr)) {
+    if (pages.length === 1 && !one.notTicket && looksLikeTicket(one.text, one.qr)) {
       const tk = parseTicket(one.text);
       setResult({ kind: 'ticket', ...tk, qr: one.qr, thumb: one.thumb, text: one.text });
       setStage('ticket');
@@ -153,7 +153,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     for (const f of merged.slice(0, 14)) {
       const { c, photo, area, kind } = f;
       if (f.nameless) {
-        venues.push({ cand: c, options: [], pick: null, keep: false, sure: false, photo, nameless: true, cat: guessCategory('', `${c.note || ''} ${kind || ''}`) });
+        venues.push({ kind, cand: c, options: [], pick: null, keep: false, sure: false, photo, nameless: true, cat: guessCategory('', `${c.note || ''} ${kind || ''}`) });
         continue;
       }
       if (navigator.onLine && c.address) {
@@ -163,7 +163,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         const there = spot ? named.filter((m) => distM(spot, m) < 250 && similarity(c.name, m.name) >= 0.6) : [];
         const opt = there[0] || (spot && { ...spot, name: c.name, address: c.address, osm_value: null });
         if (opt) {
-          venues.push({ cand: c, options: [{ ...opt, sim: 1 }], pick: 0, keep: true, sure: true, photo });
+          venues.push({ kind, cand: c, options: [{ ...opt, sim: 1 }], pick: 0, keep: true, sure: true, photo });
           continue;
         }
       }
@@ -187,9 +187,10 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         kept: scored.slice(0, 3).map((m) => ({ name: m.name, sim: Math.round(m.sim * 100) / 100 })), sure: !!sure,
         decision: !scored.length && c.weight < 4 ? 'dropped: weak guess, no map match' : sure ? 'matched' : scored.length ? 'asked' : 'kept without match' });
       if (!scored.length && c.weight < 4) continue; // weak guess with no match: don't bother asking
-      venues.push({ cand: c, options: scored.slice(0, 3), pick: sure ? 0 : null, keep: sure, sure, photo });
+      venues.push({ kind, cand: c, options: scored.slice(0, 3), pick: sure ? 0 : null, keep: sure, sure, photo });
     }
-    for (const [i, v] of venues.entries()) if (!v.nameless) v.cat = catFor(v, merged[i]?.kind);
+    // Each listing keeps the kind read from its own page (indexes shift when weak guesses are dropped).
+    for (const v of venues) if (!v.nameless) v.cat = catFor(v, v.kind);
     let guessCity = city;
     if (!guessCity) {
       const counts = {};
@@ -236,7 +237,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
 
       {stage === 'reading' && <div className="empty" style={{ paddingTop: 80 }}><div className="n">{progress || 'Reading…'}</div><div className="s" style={{ marginTop: 8 }}>The first read takes a few seconds while the text reader warms up.</div></div>}
 
-      {stage === 'ticket' && <TicketForm t={t} me={me} r={result} onDone={onClose} onNotTicket={() => understand([{ text: result.text, source: 'screenshot', thumb: result.thumb, photo: result.thumb, first: venueCandidates(result.text), pic: [] }])} />}
+      {stage === 'ticket' && <TicketForm t={t} me={me} r={result} onDone={onClose} onNotTicket={() => understand([{ notTicket: true, text: result.text, source: 'screenshot', thumb: result.thumb, photo: result.thumb, first: venueCandidates(result.text), pic: [] }])} />}
       {stage === 'venues' && <VenueReview t={t} r={result} setR={setResult} onDone={onClose} />}
     </Sheet>
   );
