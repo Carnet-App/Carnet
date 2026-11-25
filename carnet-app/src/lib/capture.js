@@ -1,4 +1,4 @@
-import { parseReceipt } from './receipt.js';
+import { parseReceipt, lineAmount, chooseAlternatives, evidenceAlts } from './receipt.js';
 import { handleName, squashName } from './match.js';
 // Reading screenshots, screen recordings, receipts and tickets — all on the phone.
 import jsQR from 'jsqr';
@@ -209,6 +209,51 @@ async function recoverColumn(src, box, angle, main) {
   });
   return added ? { text: lines.join('\n'), added } : null;
 }
+const REREAD_ROWS = false;
+async function rereadRows(src, box, angle, pick, parsed) {
+  const norm = (t) => t.replace(/\s+/g, ' ').trim();
+  const items = parsed.lines.map((l, i) => ({ l, i })).filter(({ l }) => !l.service && l.src);
+  if (items.length < 3 || items.length > 40) return null;
+  const was = RECEIPT_PREP;
+  RECEIPT_PREP = 'gray';
+  const gray = prepared(src, box, angle, pick.canvas.width);
+  RECEIPT_PREP = was;
+  const alts = {}, rowOf = {};
+  for (const { l, i } of items) {
+    const row = pick.rows.find((r) => norm(r.text) === l.src) || pick.rows.find((r) => norm(r.text).includes(l.src.slice(0, 14)));
+    if (!row) continue;
+    rowOf[i] = row;
+    const pad = Math.max(4, Math.round((row.y1 - row.y0) * 0.25)), y = Math.max(0, row.y0 - pad), h = Math.min(pick.canvas.height - y, row.y1 - row.y0 + pad * 2);
+    const vs = [];
+    for (const base of [pick.canvas, gray]) {
+      const k = 2;
+      const c = globalThis.__mkCanvas ? globalThis.__mkCanvas() : document.createElement('canvas');
+      c.width = base.width * k; c.height = h * k;
+      const g = c.getContext('2d');
+      g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+      g.drawImage(base, 0, y, base.width, h, 0, 0, c.width, c.height);
+      const d = await recognise(c, 'line');
+      const a = lineAmount((d.text || '').replace(/\n/g, ' '));
+      if (a) vs.push(a.value);
+    }
+    // The line's own quantity × unit price is a reading too ("14,50 2,00 20,00": 29,00).
+    vs.push(...evidenceAlts(l));
+    if (vs.length) alts[i] = vs;
+  }
+  const pickAlt = chooseAlternatives(parsed.lines, parsed.printedTotal, alts, parsed.servicePct && !parsed.lines.some((l) => l.service) ? parsed.servicePct : null);
+  if (!pickAlt) return null;
+  let text = pick.text;
+  const corrections = [];
+  for (const { i, to } of pickAlt) {
+    const row = rowOf[i], was2 = lineAmount(row.text);
+    if (!was2) return null;
+    const dec = /,\d{2}$/.test(was2.text.replace(/[^\d.,]/g, '')) ? ',' : '.';
+    const fixed = row.text.replace(was2.text, was2.text.replace(/\d[\d\s.,]*\d/, to.toFixed(2).replace('.', dec)));
+    text = text.replace(row.text, fixed);
+    corrections.push({ name: parsed.lines[i].name, from: parsed.lines[i].price, to, reason: 'a closer look at that line' });
+  }
+  return { text, corrections };
+}
 const priceCount = (t) => (t.match(/[£€$]?\s?\d{1,4}[.,]\d{2}\b/g) || []).length;
 // A screenshot of a photo (the Photos app, a chat): the phone's own interface above and below is
 // plain white or black. Keep only the photo, so the receipt is found inside it, not the white UI.
@@ -296,7 +341,18 @@ export async function readReceipt(src, onProgress) {
       }
     }
   }
-  return { text: pick.text, conf: pick.conf, angle: best.angle, canvas: pick.canvas, prep: pick.prep, recovered: pick.recovered || 0 };
+  // The lines don't add up to the printed total: look closer at each priced row, read in two
+  // ways, and take the single combination of readings that makes everything add up.
+  let corrections = [];
+  const parsed = parseReceipt(pick.text);
+  // Off for now: on the 55-receipt set it corrected nothing the column check doesn't, and added
+  // several seconds (docs/benchmarks/P4.md). Kept for the second reader, whose rows it can use.
+  if (REREAD_ROWS && parsed.validation === 'difference' && parsed.printedTotal != null) {
+    onProgress?.('Checking the prices against the total…');
+    const fix = await rereadRows(src, best.box, best.angle, pick, parsed).catch(() => null);
+    if (fix) ({ text: pick.text, corrections } = { text: fix.text, corrections: fix.corrections });
+  }
+  return { text: pick.text, conf: pick.conf, angle: best.angle, canvas: pick.canvas, prep: pick.prep, recovered: pick.recovered || 0, corrections };
 }
 
 export async function readImage(file, onProgress) {

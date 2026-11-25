@@ -210,6 +210,8 @@ function ReceiptSplit({ t, me, onClose }) {
       // pre-fills the tip; "service compris" → none.
       const start = splitInputs(parsed);
       // Only a total or amount paid read (a payment slip): start from it as one line.
+      // Lines a closer look corrected (the text was fixed, so mark them here).
+      for (const c of res.corrections || []) { const ln = start.lines.find((l) => l.name === c.name && Math.abs(l.price - c.to) < 0.005); if (ln) ln.corrected = { from: c.from, reason: c.reason }; }
       const startLines = start.lines.length ? start.lines : parsed.printedTotal ? [{ name: 'Total', price: parsed.printedTotal }] : [];
       setLines(startLines.map((l) => ({ ...l, who: [...emails] })));
       setAdjustments(start.adjustments);
@@ -278,6 +280,7 @@ function ReceiptSplit({ t, me, onClose }) {
               {lines.map((l, i) => (
                 <div key={i} className="row" style={{ padding: '7px 0', flexWrap: 'wrap', gap: 6 }}>
                   <input className="in grow" style={{ height: 36, font: '500 15px var(--serif)', border: 0, padding: 0, background: 'transparent', minWidth: 120 }} value={l.name} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Item" />
+                  {l.corrected && <span className="s" style={{ whiteSpace: 'nowrap', color: 'var(--gold)' }} title={`Read as ${money(l.corrected.from, cur)}; changed by ${l.corrected.reason} so the lines match the receipt’s total`}>was {money(l.corrected.from, cur)} · fixed to match the total</span>}
                   {(l.quantity > 1 || l.unitPrice) && <span className="s" style={{ whiteSpace: 'nowrap' }}>{l.quantity > 1 ? `${l.quantity} × ` : ''}{l.unitPrice ? money(l.unitPrice, cur) : ''}</span>}
                   {mode === 'item' && (
                     <div className="row" style={{ gap: 4 }}>

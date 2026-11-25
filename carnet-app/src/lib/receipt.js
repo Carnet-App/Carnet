@@ -23,7 +23,7 @@ const NOT_TOTAL = /\b(total sav\w*|sav(?:ing|ed)s? today|total points|points tot
 const SUBTOTAL = /\b(sous[- ]?total|sub[- ]?total|items total|zwischensumme|balance before saving)\b/i;
 const SERVICE = /\b(service|serv\b|servizio|bedienung|pourboire|gratuity|tip\b)/i;
 // Lines that are never items: tax tables, payment, card slips, receipt furniture.
-const SKIP = /\b(tva|vat|btw|mwst|iva|pdv|porez|steuer|netto|brutto|osnovica|iznos|rekapitulacija|ht\b|cb\b|carte|card|visa|mastercard|maestro|amex|kartica|bancontact|contactless|paypass|tendered|esp[eè]ces|cash|bargeld|gotovina|rendu|change|r[uü]ckgeld|paiement|payment|pagamento|pagamenti|betaling|betaald|kreditkarte|ec-karte|merci|thank|danke|hvala|bedankt|ticket\s*n|table|tafel|tisch|stol|couverts?|covers|serveur|server|operater|vendeur|addition|date|datum|heure|time|tijd|vrijeme|siret|oib|tel|t[ée]l|phone|clubcard|nectar points|sparks|points|per guest|par client|aid|pan seq|auth|merchant|terminal|approved|item value|weight|deposit|reprint|rabatt in|items\s*:|per kg|kg\b)\b/i;
+const SKIP = /\b(tva|vat|btw|mwst|iva|pdv|porez|steuer|netto|brutto|osnovica|iznos|rekapitulacija|ht\b|cb\b|carte|card|visa|mastercard|maestro|amex|kartica|bancontact|contactless|paypass|tendered|esp[eè]ces|cash|bargeld|gotovina|rendu|change|r[uü]ckgeld|paiement|payment|pagamento|pagamenti|betaling|betaald|kreditkarte|ec-karte|merci|thank|danke|hvala|bedankt|ticket\s*n|table|tafel|tisch|stol|couverts?|covers|serveur|server|operater|vendeur|addition|date|datum|heure|time|tijd|vrijeme|siret|oib|tel|t[ée]l|phone|clubcard|nectar points|sparks|points|per guest|par client|aid|pan seq|auth|merchant|terminal|approved|it\w{1,3} value|weight|deposit|reprint|rabatt in|items\s*:|per kg|kg\b)\b/i;
 const MONEY_CUR = (t) => (/£|gbp/i.test(t) ? 'GBP' : /€|\beur\b/i.test(t) ? 'EUR' : /\bchf\b/i.test(t) ? 'CHF' : /\$|usd/i.test(t) ? 'USD' : null);
 
 const num = (s) => {
@@ -131,6 +131,9 @@ export function parseReceipt(text) {
       const [a, b, c] = am.slice(-3).map((x) => x.value);
       if (Math.abs(c2(a * b) - c2(c)) <= 1) { unitPrice = a; quantity = b; }
       else if (Math.abs(c2(a * c) - c2(b)) <= 1) { unitPrice = c; quantity = a; }
+      // Disagreeing columns ("14,50 2,00 20,00"): keep what the unit and quantity say; the total
+      // check decides which was misread.
+      else if (b >= 1 && b <= 20 && Math.abs(b - Math.round(b)) < 0.001) { unitPrice = a; quantity = Math.round(b); }
     } else if (am.length === 2) {
       const [a, b] = am.map((x) => x.value);
       if (c2(a) === c2(b)) unitPrice = a;
@@ -149,7 +152,12 @@ export function parseReceipt(text) {
       name = pending.replace(/^(\d{1,2})\s*(?:[x×*]\s*)?/, (m, q) => { quantity ??= +q; return ''; }).trim();
       pending = null;
     } else pending = null;
+    // A lone amount equal to everything above it: a total whose label is printed elsewhere.
+    if (!/\p{L}{3}/u.test(name) && lines.length >= 2 && Math.abs(c2(price) - lines.reduce((x, y) => x + c2(y.price), 0)) <= 1) { totals.push(price); continue; }
     if (!/\p{L}{3}/u.test(name) || price <= 0 || price > 5000) continue;
+    // "1 Mulet Noir 35,00€ 25,00€": a quantity and two amounts that disagree. Keep the unit price
+    // as printed; the total check decides which of the two was misread.
+    if (unitPrice == null && quantity != null && am.length === 2 && c2(am[0].value) !== c2(price)) unitPrice = am[0].value;
     if (unitPrice != null && quantity == null && c2(unitPrice) !== c2(price) && unitPrice > 0) {
       const q = price / unitPrice;
       if (Math.abs(q - Math.round(q)) < 0.001) quantity = Math.round(q);
@@ -158,23 +166,62 @@ export function parseReceipt(text) {
     if (quantity != null && quantity !== 1) line.quantity = quantity;
     if (unitPrice != null && c2(unitPrice) !== c2(price)) line.unitPrice = unitPrice;
     if (quantity === 1 && unitPrice == null) line.quantity = 1;
+    line.src = l; // the line as read, so a closer re-read can find it
     lines.push(line);
   }
 
-  const items = c2(lines.filter((l) => !l.service).reduce((a, b) => a + b.price, 0));
-  const service = c2(lines.filter((l) => l.service).reduce((a, b) => a + b.price, 0));
-  const discount = c2(adjustments.reduce((a, b) => a + b.amount, 0));
-  const sum = (items + service + discount) / 100;
-  // Several totals printed: the one the lines add up to; otherwise the first "total" read.
-  const fits = (t) => Math.abs(c2(t) - (items + service + discount)) <= 1 ||
-    (!service && servicePct && Math.abs(c2(t) - Math.round((items + discount) * (1 + servicePct / 100))) <= 2);
-  // A printed total the lines add up to; else an amount paid they add up to; else the first total
-  // read, else what was paid (a payment slip with no item lines, a total too faint to read).
-  const total = totals.find(fits) ?? paid.find(fits) ?? totals[0] ?? paid[0] ?? null;
-  let validation = 'unverified';
-  // With no item lines there is nothing to check the total against.
-  if (total != null && (items || service)) validation = fits(total) ? 'reconciled' : 'difference';
-  else if (subtotals.length && subtotals.some((s) => Math.abs(c2(s) - items) <= 1) && !service) validation = 'unverified';
+  // A "line" that is really a total printed apart from its label (Tesco puts "£10.80 £10.80" above
+  // "TOTAL: Card"; M&S puts "Balance before Saving" beside a lone amount): it equals everything
+  // above it, or a total or payment read elsewhere, or it repeats at the foot of the list and is
+  // larger than any item. It becomes a total, not an item.
+  {
+    const known = [...totals, ...paid, ...subtotals].map(c2);
+    let run = 0, maxItem = 0;
+    for (let i = 0; i < lines.length; i++) {
+      const ln = lines[i];
+      if (ln.service) continue;
+      const p = c2(ln.price);
+      const next = lines[i + 1];
+      const repeatAtEnd = next && c2(next.price) === p && lines.slice(i + 2).every((x) => c2(x.price) === p || x.service);
+      if ((i >= 2 && Math.abs(p - run) <= 1) || (i >= 1 && known.some((k) => Math.abs(k - p) <= 1) && p >= run * 0.5) || (repeatAtEnd && p > maxItem && i >= 1)) {
+        totals.push(ln.price);
+        lines.splice(i, 1);
+        i--;
+        continue;
+      }
+      run += p;
+      maxItem = Math.max(maxItem, p);
+    }
+  }
+  const summarise = () => {
+    const items = c2(lines.filter((l) => !l.service).reduce((a, b) => a + b.price, 0));
+    const service = c2(lines.filter((l) => l.service).reduce((a, b) => a + b.price, 0));
+    const discount = c2(adjustments.reduce((a, b) => a + b.amount, 0));
+    // Several totals printed: the one the lines add up to; otherwise the first "total" read.
+    const fits = (t) => Math.abs(c2(t) - (items + service + discount)) <= 1 ||
+      (!service && servicePct && Math.abs(c2(t) - Math.round((items + discount) * (1 + servicePct / 100))) <= 2);
+    // A printed total the lines add up to; else an amount paid they add up to; else the first total
+    // read, else what was paid (a payment slip with no item lines, a total too faint to read).
+    const total = totals.find(fits) ?? paid.find(fits) ?? totals[0] ?? paid[0] ?? null;
+    let validation = 'unverified';
+    // With no item lines there is nothing to check the total against.
+    if (total != null && (items || service)) validation = fits(total) ? 'reconciled' : 'difference';
+    return { items, service, discount, sum: (items + service + discount) / 100, total, validation };
+  };
+  let S = summarise();
+  // The total as a check: lines that don't add up to it are corrected only when exactly one
+  // likely misreading explains the whole gap (see reconcile below). Every change is recorded.
+  const corrections = [];
+  if (S.validation === 'difference') {
+    const fix = reconcile(lines, S.total, S.items + S.service + S.discount, servicePct && !S.service ? servicePct : null);
+    if (fix) {
+      if (fix.lines) for (const f of fix.lines) { const ln = lines[f.line]; corrections.push({ name: ln.name, from: ln.price, to: f.to, reason: fix.reason }); ln.price = f.to; ln.corrected = { from: f.from, reason: fix.reason }; }
+      else if (fix.line != null) { const ln = lines[fix.line]; corrections.push({ name: ln.name, from: ln.price, to: fix.to, reason: fix.reason }); ln.price = fix.to; ln.corrected = { from: fix.from, reason: fix.reason }; }
+      else { corrections.push({ name: 'Total', from: S.total, to: fix.to, reason: fix.reason }); totals.unshift(fix.to); }
+      S = summarise();
+    }
+  }
+  const { sum, total, validation } = S;
   return {
     lines,
     adjustments,
@@ -189,7 +236,90 @@ export function parseReceipt(text) {
     currency: MONEY_CUR(text),
     // Any money at all on it? (A bag-drop slip or parcel receipt has none.)
     anyMoney: /[£€$]\s?\d|\d[.,]\d{2}(?!\d)/.test(text),
+    corrections,
   };
+}
+
+// Digits the reader commonly mistakes for each other on receipt print.
+const LOOKALIKE = { 0: '869', 1: '74', 2: '75', 3: '582', 4: '1', 5: '362', 6: '508', 7: '12', 8: '3605', 9: '803' };
+const swaps = (cents) => {
+  const s = String(cents), out = [];
+  for (let i = 0; i < s.length; i++) for (const d of LOOKALIKE[s[i]] || '') {
+    const t = s.slice(0, i) + d + s.slice(i + 1);
+    if (t[0] !== '0' || t.length === 1) out.push(+t);
+  }
+  return out;
+};
+// The lines are `gap` short of (or over) the printed total. Candidates, each of which alone would
+// make everything add up exactly:
+//   · a line whose quantity × unit price disagrees with its line total (the strongest evidence);
+//   · one lookalike digit in one line's price;
+// Only a single candidate is accepted: two or more explanations means we can't tell, so nothing
+// changes and the gap is shown as before.
+export function reconcile(lines, total, sumCents, servicePct = null) {
+  const target = c2(total);
+  // One or two lines: making them equal the total proves nothing. Correct only within a real list.
+  if (lines.filter((l) => !l.service).length < 3) return null;
+  const fitsWith = (cents) => Math.abs(target - (servicePct ? Math.round(cents * (1 + servicePct / 100)) : cents)) <= (servicePct ? 2 : 0);
+  // Quantity × unit price first (the unit price itself may carry one lookalike digit).
+  const alts = {};
+  lines.forEach((l, i) => { const v = evidenceAlts(l); if (v.length) alts[i] = v; });
+  const viaColumns = chooseAlternatives(lines, total, alts, servicePct);
+  if (viaColumns?.length === 1) { const { i, to } = viaColumns[0]; return { line: i, from: lines[i].price, to, reason: 'quantity × unit price' }; }
+  if (viaColumns?.length === 2) return { lines: viaColumns.map(({ i, to }) => ({ line: i, from: lines[i].price, to })), reason: 'quantity × unit price' };
+  const items = lines.map((l, i) => ({ l, i })).filter(({ l }) => !l.service);
+  const cands = [];
+  for (const { l, i } of items) {
+    const p = c2(l.price);
+    for (const alt of swaps(p)) if (alt > 0 && fitsWith(sumCents - p + alt)) cands.push({ line: i, from: l.price, to: alt / 100, reason: 'misread digit' });
+  }
+  // The total itself is never "corrected": it's printed largest and is the reference.
+  return cands.length === 1 ? cands[0] : null;
+}
+
+// Another reading of a line from its own columns: quantity × unit price, and the same with one
+// lookalike digit in the unit price ("14,60 × 2" printed as "14,50").
+export function evidenceAlts(l) {
+  if (!l.unitPrice || l.service) return [];
+  const q = l.quantity || 1, direct = c2(q * l.unitPrice);
+  const out = direct !== c2(l.price) ? [direct / 100] : [];
+  // Weaker: a guess about a digit, so at most one of these is used in a combination.
+  if (q > 1) for (const u of swaps(c2(l.unitPrice))) if (q * u !== c2(l.price) && q * u !== direct) out.push({ value: (q * u) / 100, weak: true });
+  return out;
+}
+
+// The last money amount on one line of text, as {value, text} (for re-reading a single row).
+export function lineAmount(line) {
+  const lm = line.replace(/\d{1,2}(?:[.,]\d{1,2})?\s*%/g, (m) => ' '.repeat(m.length)).replace(/\d+[.,]\s?\d+\s?(?:l|cl|ml|kg|g|lt)\b/gi, (m) => ' '.repeat(m.length));
+  const am = amountsIn(lm);
+  if (!am.length) return null;
+  const a = am[am.length - 1];
+  return { value: a.value, text: line.slice(a.index, a.end) };
+}
+
+// Other readings of some lines (a closer look at each row): the one combination that makes the
+// lines add up to the total, changing as few lines as possible. Ambiguous → null.
+export function chooseAlternatives(lines, total, alts, servicePct = null) {
+  const items = lines.map((l, i) => ({ l, i })).filter(({ l }) => !l.service);
+  if (items.length < 3) return null;
+  const sum = lines.reduce((a, l) => a + c2(l.price), 0);
+  const target = c2(total);
+  const fits = (cents) => Math.abs(target - (servicePct ? Math.round(cents * (1 + servicePct / 100)) : cents)) <= (servicePct ? 2 : 0);
+  // Alternatives are amounts, or { value, weak } for a digit guess.
+  const opts = Object.entries(alts).map(([i, vs]) => {
+    const seen = new Map();
+    for (const x of vs) { const v = c2(typeof x === 'number' ? x : x.value), weak = typeof x === 'object' && !!x.weak; if (v > 0 && v !== c2(lines[+i].price) && (!seen.has(v) || !weak)) seen.set(v, weak); }
+    return { i: +i, vs: [...seen].map(([v, weak]) => ({ v, weak })) };
+  }).filter((o) => o.vs.length);
+  const one = [];
+  for (const o of opts) for (const { v } of o.vs) if (fits(sum - c2(lines[o.i].price) + v)) one.push([{ i: o.i, to: v / 100 }]);
+  if (one.length === 1) return one[0];
+  if (one.length > 1) return null;
+  const two = [];
+  for (let a = 0; a < opts.length; a++) for (let b = a + 1; b < opts.length; b++)
+    for (const A of opts[a].vs) for (const B of opts[b].vs)
+      if (!(A.weak && B.weak) && fits(sum - c2(lines[opts[a].i].price) - c2(lines[opts[b].i].price) + A.v + B.v)) two.push([{ i: opts[a].i, to: A.v / 100 }, { i: opts[b].i, to: B.v / 100 }]);
+  return two.length === 1 ? two[0] : null;
 }
 
 // What the split screen starts from: item lines, a printed service amount and any discounts kept

@@ -132,3 +132,28 @@ test('a payment slip with no item lines: the amount, nothing to check it against
   assert.equal(r.validation, 'unverified');
   assert.equal(r.lines.length, 0);
 });
+
+test('the total as a check: one lookalike digit, only when it is the single explanation', () => {
+  const r = parseReceipt('1 Linguine 20,00€ 20,00€\n1 Sassa 45,00€ 45,00€\n1 Mulet Noir 35,00€ 25,00€\n2 Dessert 9,00€ 18,00€\n1 Vittel 8,00€ 8,00€\n2 Plat 10,00€ 20,00€\nTOTAL TTC 146,00€');
+  assert.equal(r.validation, 'reconciled');
+  assert.deepEqual(r.corrections.map((c) => [c.from, c.to, c.reason]), [[25, 35, 'quantity × unit price']]);
+  // Three identical lines could each be the misread one: nothing is changed.
+  const t = parseReceipt('Danish Pastries £4.20\nMaple Plait £2.10\nCroissant £2.10\nSwirls £2.10\nTOTAL £10.80');
+  assert.equal(t.validation, 'difference');
+  assert.equal(t.corrections.length, 0);
+  // One line: making it equal the total proves nothing.
+  assert.equal(parseReceipt('X100VI Black 1588.00\nTotal: 1688.00').corrections.length, 0);
+});
+
+test('a total printed apart from its label is not an item', () => {
+  const r = parseReceipt('1 Tesco Flapjack £3.45\n1 Pain Aux Raisin £1.85\n1 Almond Croissant £1.85\n£7.15\n£7.15\nTOTAL:\nCard');
+  assert.equal(r.lines.length, 3);
+  assert.equal(r.validation, 'reconciled');
+});
+
+test('other readings of rows: the one combination that adds up', async () => {
+  const { chooseAlternatives } = await import('../../src/lib/receipt.js');
+  const lines = [{ price: 20 }, { price: 17 }, { price: 4.6 }, { price: 12 }];
+  assert.deepEqual(chooseAlternatives(lines, 62.5, { 0: [29, 20], 2: [4.5] }), [{ i: 0, to: 29 }, { i: 2, to: 4.5 }]);
+  assert.equal(chooseAlternatives(lines, 62.5, { 0: [29, 29.1], 2: [4.5, 4.4] }), null, 'two ways to add up: ambiguous');
+});
