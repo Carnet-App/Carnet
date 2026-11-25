@@ -81,3 +81,14 @@ test('everyday phrases are not names, and people tagged in captions are not plac
   const names = venueCandidates('S95 founder @dualipa serves up her picks\nthanks to @lamenagerieparis').map((x) => x.name);
   assert.deepEqual(names, ['la menagerie']);
 });
+
+test('pins read as stray symbols, "Name: address", "it\'s called", "X in the 3rd", headings above text', async () => {
+  const { venueCandidates } = await import('../../src/lib/capture.js');
+  const top = (t) => venueCandidates(t, null, 1, { social: true }).filter((c) => c.weight >= 4).map((c) => [c.name, c.address || null]);
+  assert.deepEqual(top('Ÿ Kraftwerk Berlin @kraftwerkberlinofficial'), [['Kraftwerk Berlin', null]]);
+  assert.deepEqual(top('natalia.lately Ÿ Café Honolulu: Warschauer Str. 39/40, 10243 Berlin'), [['Café Honolulu', 'Warschauer Str. 39/40']]);
+  assert.deepEqual(top("handluggageonly It's called Malabar and it's at the top of the Hotel"), [['Malabar', null]]);
+  assert.deepEqual(top('a new bar in Paris, Rojo in the 3rd. love to find'), [['Rojo', null]]);
+  assert.deepEqual(top('BAR OMI\nAfter Onii-San and Ojii, Laetitia and Arthur Cohen, joined by'), [['BAR OMI', null]]);
+  assert.deepEqual(top("Berlin's dreamiest hideaway\nfor rainy days"), []);
+});

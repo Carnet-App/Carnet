@@ -430,7 +430,8 @@ export function overlayCandidates(lines, { handle } = {}) {
   }
   // A lone short line, biggest first ("VIRAGE"), when there's no quote to anchor on.
   if (!out.length) {
-    const lone = L.filter((l, i) => !used.has(i) && l.text.split(/\s+/).length <= 4 && !STOP.test(l.text) && !everyday(l.text) && !junk(l.text) && !/[.!?]$/.test(l.text) && !/[€£$]|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise/i.test(l.text) && /\p{L}{3,}/u.test(l.text))
+    const lone = L.filter((l, i) => !used.has(i) && l.text.split(/\s+/).length <= 4 && !STOP.test(l.text) && !everyday(l.text) &&
+      !/\bfollow\b/i.test(l.text) && !(/^\p{Lu}?[\p{Ll}\s'’]+\b(wine bar|bar|caf[eé]|restaurant|rooftop|spot|club)$/u.test(l.text)) && !junk(l.text) && !/[.!?]$/.test(l.text) && !/[€£$]|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise/i.test(l.text) && /\p{L}{3,}/u.test(l.text))
       .sort((a, b) => b.h - a.h);
     lone.slice(0, 2).filter((l, k) => !k || l.h >= lone[0].h * 0.8).forEach((l, k) => out.push({ name: l.text, why: k ? 'on the photo' : 'on the photo · biggest text', weight: k ? 3 : 5 }));
   }
@@ -542,6 +543,8 @@ function junk(name) {
   if (UI.test(name)) return true;
   if (/\b(password|passcode|sign in|sign up|log in|login|username|forgot|verification code)\b/i.test(name)) return true; // login and account screens
   // Article and list headlines: "Best natural wine in Paris", "10 places to eat in Berlin"
+  // Headline phrases on photos: "Berlin's dreamiest hideaway", "hidden wine bar", "architectural gem".
+  if (/\b(hidden|gem|hideaway|cosiest|coziest|coolest|dreamiest|chicest|prettiest|loveliest|iconic|secret|pov)\b/i.test(name) || /\p{L}+['’]s\s+(most|best|\p{L}+est)\b/iu.test(name)) return true;
   if (/^(the\s+)?(\d+\s+)?(best|top|our|where to|guide|favou?rite|must|hidden gems?)\b/i.test(name) || /\b(places|spots|bars|restaurants)\s+(to|in|for)\b/i.test(name)) return true;
   return false;
 }
@@ -579,7 +582,7 @@ export function venueCandidates(text, lines = null, height = 1, opts = {}) {
     if (name.length < 3 || name.length > 48 || junk(name)) return;
     const k = name.toLowerCase();
     const ex = out.find((o) => o.name.toLowerCase() === k);
-    if (ex) { ex.weight += weight; if (weight > 3) ex.why = why; }
+    if (ex) { ex.weight += weight; if (weight > 3) ex.why = why; if (ex.name === ex.name.toLowerCase() && name !== k) ex.name = name; }
     else out.push({ name, why, weight });
   };
   const all = text.split('\n').map((l) => l.trim()).filter(Boolean);
@@ -618,9 +621,10 @@ export function venueCandidates(text, lines = null, height = 1, opts = {}) {
 
   // Instagram location tag: "victoiretaverne 📍 Les Puces de Vanves, Porte de Vanves, Paris"
   // (the pin often reads as junk like "Ÿ").
-  for (const l of all.slice(0, 6)) {
-    const m = l.match(/^[a-z0-9._]{3,30}\s+(?:\S{1,2}\s+)?(\p{Lu}[^,]{2,40}),\s*\p{Lu}[^,]*(?:,|$)/u);
-    if (m) add(m[1], 'location tag', 6);
+  for (const [li, l] of all.slice(0, 6).entries()) {
+    const m = l.match(/^([a-z0-9._]{3,30})\s+(?:\S{1,2}\s+)?(\p{Lu}[^,]{2,40}),\s*\p{Lu}[^,]*(?:,|$)/u);
+    // "and Joshua Fontaine (La Candelaria, …": "and" isn't an account name.
+    if (m && !STOP.test(m[1]) && (/[._\d]/.test(m[1]) || m[1] === opts.handle || li === 0)) add(m[2], 'location tag', 6);
   }
   // Hashtags that aren't generic: #caveaudelahuchette → "Caveau de la Huchette", checked on the map.
   for (const m of text.matchAll(/#([\p{L}\d_]{6,40})/gu)) {
@@ -632,8 +636,24 @@ export function venueCandidates(text, lines = null, height = 1, opts = {}) {
   }
 
   for (const l of all) {
-    const pin = l.match(/(?:📍|📌|location:|address:|adresse\s*:)\s*(.+)/i);
-    if (pin) add(pin[1].split(/[,–—-]/)[0], 'pin / location', 5);
+    const pin = l.match(/(?:📍|📌|location:|address:|adresse\s*:)\s*(.+)/i)
+      // The pin emoji usually reaches us as a stray symbol: "Ÿ Kraftwerk Berlin", "? The Lobby at…",
+      // "natalia.lately Ÿ Café Honolulu: Warschauer Str. 39/40, 10243 Berlin".
+      || l.match(/^(?:[a-z0-9._]{3,30}\s+)?[Ÿ?{¥¢©®§•]\s+(\p{Lu}.{2,80})$/u);
+    if (pin) {
+      const [head, ...rest] = pin[1].split(/\s*[:,|–—]\s+|\s+@/);
+      const tail = rest.join(', ');
+      // What follows is an address if it has a house number: keep it.
+      const addr = /\d/.test(tail) ? tail.replace(/,?\s*\d{5}\s+\p{L}+$/u, '').replace(/,\s*[\p{L} -]+$/u, (m) => (/\d/.test(m) ? m : '')).trim() : null;
+      const before = out.length;
+      add(head, 'pin / location', addr ? 12 : 7);
+      const hit = out.find((o) => o.name.toLowerCase() === head.trim().toLowerCase().replace(/[^\p{L}\p{N}')]+$/u, '')) || (out.length > before ? out[out.length - 1] : null);
+      if (hit && addr && !hit.address) hit.address = addr;
+    }
+    const called = l.match(/\b(?:[Ii]t['’]s|[Ii]t is|is)\s+called\s+(\p{Lu}[\p{L}'’&-]*(?:\s+\p{Lu}[\p{L}'’&-]*){0,3})/u);
+    if (called) add(called[1], 'named in the caption', 6);
+    const inThe = l.match(/(?:^|[,.]\s+)(\p{Lu}[\p{L}'’&-]+(?:\s+\p{Lu}[\p{L}'’&-]+){0,3})\s+in\s+the\s+\d{1,2}(?:st|nd|rd|th|e|ème)\b/u);
+    if (inThe) add(inThe[1], 'named in the caption', 4);
     for (const m of l.matchAll(/@([a-z0-9._]{3,30})/gi)) {
       // "S95 founder @dualipa", "📸 @someone", "with @friend": a person, not a place.
       if (/(?:founder|co-?founder|chef|owner|by|with|ft\.?|feat\.?|photo(?:s|graphy)?|📸|dj|host(?:ed)? by|thanks|cc)\s*:?\s*$/i.test(l.slice(0, m.index)) && !/thanks to\s*$/i.test(l.slice(0, m.index))) continue;
@@ -658,6 +678,12 @@ export function venueCandidates(text, lines = null, height = 1, opts = {}) {
     const listed = out.filter((o) => o.why === 'list item').length >= 2;
     const big = listed ? [] : [...body].sort((a, b) => b.h - a.h).slice(0, 3);
     big.forEach((l, i) => add(l.text, 'largest text', 4 - i));
+  }
+  // A short capitals heading straight above a paragraph about it ("BAR OMI" / "After Onii-San and…").
+  for (let i = 0; i < all.length - 1; i++) {
+    const h = all[i], next = all[i + 1];
+    if (h.length <= 40 && h === h.toUpperCase() && /\p{Lu}{2,}/u.test(h) && h.split(/\s+/).length <= 6 && next.length >= 40 && /^[‘'“"«]?\p{Lu}/u.test(next) && /\p{Ll}/u.test(next))
+      add(h.replace(/\s+[\p{P}\p{S}]+$/u, ''), 'heading above its description', 6);
   }
   // Short title-case lines are weak guesses (skipped on map screenshots: street labels).
   if (!isMaps)
