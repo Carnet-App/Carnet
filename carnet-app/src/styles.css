@@ -114,3 +114,6 @@ html, body { overflow-x: hidden; }
 .page, .sheet { overflow-x: hidden; }
 .sheet > *, .page > * { max-width: 100%; }
 select.in { -webkit-appearance: none; appearance: none; background-image: linear-gradient(45deg, transparent 50%, #6F665B 50%), linear-gradient(135deg, #6F665B 50%, transparent 50%); background-position: calc(100% - 18px) 19px, calc(100% - 13px) 19px; background-size: 5px 5px; background-repeat: no-repeat; padding-right: 30px; }
+/* iOS draws time and date inputs with their text at the top: centre it like the other fields. */
+input.in[type='time'], input.in[type='date'] { -webkit-appearance: none; appearance: none; display: flex; align-items: center; line-height: 42px; text-align: left; }
+input.in[type='time']::-webkit-date-and-time-value, input.in[type='date']::-webkit-date-and-time-value { text-align: left; margin: 0; line-height: 42px; }

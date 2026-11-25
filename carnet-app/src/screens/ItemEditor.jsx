@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useState, useRef } from 'react';
+import { loadImage, toCanvas, readQR, thumbBlob } from '../lib/capture';
+import { storeFile } from '../lib/files';
 import { Sheet, Seg, Icon } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
 import { CATS, daysBetween, dayLabel, findVenue, guessCategory } from '../lib/util';
@@ -104,18 +106,56 @@ export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
           </select>
         </label>
         <label className="f" style={{ width: 96 }}>From<input className="in" type="time" value={f.start_time} onChange={(e) => set('start_time', e.target.value)} /></label>
-        <label className="f" style={{ width: 96 }}>To{f.start_time && f.end_time && f.end_time <= f.start_time ? <span className="s"> · next day</span> : ''}<input className="in" type="time" value={f.end_time} onChange={(e) => set('end_time', e.target.value)} /></label>
+        <label className="f" style={{ width: 96 }}>To<input className="in" type="time" value={f.end_time} onChange={(e) => set('end_time', e.target.value)} /></label>
       </div>
+      {f.start_time && f.end_time && f.end_time <= f.start_time && <div className="s" style={{ textAlign: 'right', marginTop: -4 }}>Ends the next morning, {f.end_time}</div>}
       <label className="f">Status</label>
       <Seg value={f.status} onChange={(v) => set('status', v)} options={[['idea', 'Idea'], ['planned', 'Planned'], ['booked', 'Booked']]} label="Status" />
       <label className="f">Who can see it</label>
       <Seg value={f.visibility} onChange={(v) => set('visibility', v)} options={[['shared', 'Everyone'], ['busy', 'Busy only'], ['hidden', 'Just me']]} label="Visibility" />
       <div className="s">{{ shared: 'The whole crew sees it.', busy: 'The crew sees a grey “busy” block — not what it is.', hidden: 'Only you can see it.' }[f.visibility]}</div>
+      <TicketField f={f} set={set} tripId={trip.id} />
       {f.status === 'booked' && <label className="f">Booking ref<input className="in" value={f.booking_ref || ''} onChange={(e) => set('booking_ref', e.target.value)} /></label>}
       <label className="f">Notes<textarea className="in" value={f.notes || ''} onChange={(e) => set('notes', e.target.value)} /></label>
       {asksApproval && <div className="card dashed s">This changes the shared schedule, so it goes to {t.members.filter((m) => ['owner', 'admin'].includes(m.role)).map((m) => m.name || m.email.split('@')[0]).join(' or ') || 'the trip admin'} to approve. Ideas with no day, and your own Busy / Just-me time, go straight in.</div>}
       <button className="btn block" disabled={!f.title.trim()} onClick={save}>{asksApproval ? 'Propose' : item ? 'Save' : 'Add'}</button>
       {item && <button className="btn ghost block" onClick={del}>{needsApproval(t, item, null) ? 'Propose removing' : 'Remove'}</button>}
     </Sheet>
+  );
+}
+
+// A ticket for this plan: a screenshot or photo of it. The QR code is read on the phone and saved,
+// so Wallet can show a crisp code offline; the image is kept too, for tickets without one.
+function TicketField({ f, set, tripId }) {
+  const ref = useRef();
+  const [busy, setBusy] = useState('');
+  async function add(file) {
+    if (!file) return;
+    setBusy('Reading the ticket…');
+    try {
+      const { img } = await loadImage(file);
+      // Small codes need the full resolution; try that, then a smaller copy (blur helps some).
+      let qr = null;
+      for (const w of [3000, 1600, 900]) { qr = readQR(toCanvas(img, w)); if (qr) break; }
+      const path = await storeFile(await thumbBlob(toCanvas(img, 1600), 1200), { tripId });
+      set('qr_text', qr);
+      set('attachment_path', path);
+      if (f.status !== 'booked') set('status', 'booked');
+      setBusy(qr ? '' : 'No QR code found on that. The image is saved and shows in Wallet.');
+    } catch (e) { setBusy('Couldn’t read that: ' + e.message); }
+  }
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      <label className="f">Ticket</label>
+      {(f.qr_text || f.attachment_path) && (
+        <div className="between card" style={{ padding: '10px 12px' }}>
+          <div className="s">{f.qr_text ? 'QR code saved · shows in Wallet, works offline' : 'Ticket image saved · shows in Wallet'}</div>
+          <button className="link" onClick={() => { set('qr_text', null); set('attachment_path', null); setBusy(''); }}>Remove</button>
+        </div>
+      )}
+      <button className="btn ghost block" onClick={() => ref.current?.click()}>{f.qr_text || f.attachment_path ? 'Replace ticket' : 'Add ticket (screenshot or photo)'}</button>
+      <input ref={ref} type="file" accept="image/*" hidden onChange={(e) => { add(e.target.files?.[0]); e.target.value = ''; }} />
+      {busy && <div className="s">{busy}</div>}
+    </div>
   );
 }
