@@ -1,6 +1,10 @@
 import { useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
+// MapLibre 6 looks for its worker next to its own module; once bundled, that file isn't there and
+// the map never draws its streets. Have Vite ship the worker and point MapLibre at it.
+import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
+maplibregl.setWorkerUrl(new URL(mapWorkerUrl, location.href).href);
 import { Icon, CatTag } from '../ui';
 import { cat, useLocation, stayFor, todayISO, walkMin, distM } from '../lib/util';
 import { PlacePhoto, PlaceDetail } from './Places';
