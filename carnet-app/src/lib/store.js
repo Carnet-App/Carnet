@@ -37,13 +37,30 @@ export async function loadLocal() {
   const saved = await get('carnet-state').catch(() => null);
   if (saved) state = { ...state, ...saved, online: navigator.onLine };
   for (const t of TABLES) state[t] = state[t] || {};
+  // Jobs saved by an older version have no id.
+  state.outbox = (state.outbox || []).map((j) => (j.jid ? j : { ...j, jid: uid() }));
   emit();
 }
 
+// Money rows carry a revision: each write says which revision it was based on and an operation
+// id, so the server can refuse a stale overwrite and ignore a job it has already applied.
+const VERSIONED = new Set(['expenses', 'settlements']);
+let inFlight = null; // the job being sent right now
+
+function enqueue(job) {
+  const same = (j) => j.table === job.table && (j.row?.id || j.id) === (job.row?.id || job.id) && j.jid !== inFlight;
+  // A newer write of the same row replaces one still waiting (it carries the whole row anyway).
+  const keep = job.op === 'upsert' ? state.outbox.filter((j) => !(j.op === 'upsert' && same(j))) : state.outbox.filter((j) => !same(j));
+  const replaced = state.outbox.find((j) => j.op === 'upsert' && same(j));
+  if (replaced && job.op === 'upsert') job.base = replaced.base;
+  state.outbox = [...keep, job];
+}
+
 export function upsert(table, row) {
+  const before = state[table][row.id];
   const full = { ...row, updated_at: new Date().toISOString() };
-  state[table] = { ...state[table], [full.id]: { ...(state[table][full.id] || {}), ...full } };
-  state.outbox = [...state.outbox, { table, op: 'upsert', row: state[table][full.id] }];
+  state[table] = { ...state[table], [full.id]: { ...(before || {}), ...full } };
+  enqueue({ jid: uid(), table, op: 'upsert', row: state[table][full.id], base: VERSIONED.has(table) ? before?.revision ?? null : undefined });
   emit();
   persist();
   flush();
@@ -54,7 +71,16 @@ export function remove(table, id) {
   const next = { ...state[table] };
   delete next[id];
   state[table] = next;
-  state.outbox = [...state.outbox, { table, op: 'delete', id }];
+  enqueue({ jid: uid(), table, op: 'delete', id });
+  emit();
+  persist();
+  flush();
+}
+
+// A file kept on the phone and still to be uploaded: a job in the same saved outbox, so it
+// survives the app closing (it used to live in memory only).
+export function queueUpload(path, contentType = 'image/jpeg') {
+  enqueue({ jid: uid(), table: 'storage', op: 'upload', id: path, contentType });
   emit();
   persist();
   flush();
@@ -68,32 +94,76 @@ const clean = (table, row) => {
   return r;
 };
 
-let flushing = false;
-export async function flush() {
-  if (flushing || !navigator.onLine) return;
+// One drain at a time. The guard is taken before anything is awaited, so two quick saves
+// can't start two drains that send the same job twice or skip one (F9). A call that arrives
+// mid-drain asks for another pass instead.
+let flushP = null;
+let again = false;
+export function flush() {
+  if (flushP) { again = true; return flushP; }
+  flushP = (async () => {
+    try {
+      do { again = false; await drain(); } while (again && navigator.onLine);
+    } finally {
+      flushP = null;
+    }
+  })();
+  return flushP;
+}
+
+const done = (job) => {
+  state.outbox = state.outbox.filter((j) => j.jid !== job.jid);
+  emit();
+  persist();
+};
+const isNetwork = (error) => /fetch|network|Failed|Load failed/i.test(error?.message || '') && !error?.code;
+
+async function send(job) {
+  if (job.op === 'upload') {
+    const blob = await loadBlob(job.id).catch(() => null);
+    if (!blob) return { error: null }; // nothing left to send
+    return supabase.storage.from('captures').upload(job.id, blob, { contentType: blob.type || job.contentType, upsert: true });
+  }
+  if (job.op === 'delete') return supabase.from(job.table).delete().eq('id', job.id);
+  const row = clean(job.table, job.row);
+  if (!VERSIONED.has(job.table)) return supabase.from(job.table).upsert(row);
+  delete row.last_op_id;
+  const versioned = { ...row, op_id: job.jid, base_revision: job.base ?? null };
+  let res = await supabase.from(job.table).upsert(versioned).select('revision');
+  // Before the stage 2 database script runs, the server doesn't know these two columns yet.
+  if (res.error && /op_id|base_revision/.test(res.error.message || '')) res = await supabase.from(job.table).upsert(row).select('revision');
+  return res;
+}
+
+async function drain() {
+  if (!navigator.onLine) return;
   const { data } = await supabase.auth.getSession();
   if (!data.session) return;
-  flushing = true;
-  try {
-    while (state.outbox.length) {
-      const job = state.outbox[0];
-      const q =
-        job.op === 'upsert'
-          ? supabase.from(job.table).upsert(clean(job.table, job.row))
-          : supabase.from(job.table).delete().eq('id', job.id);
-      const { error } = await q;
-      if (error) {
-        const network = /fetch|network|Failed/i.test(error.message || '') && !error.code;
-        if (network) break; // try again when signal returns
-        state.failed = [...state.failed, { ...job, error: error.message, at: Date.now() }].slice(-30);
-        console.warn('Sync rejected', job, error);
-      }
-      state.outbox = state.outbox.slice(1);
-      emit();
-      persist();
+  while (state.outbox.length) {
+    const job = state.outbox[0];
+    inFlight = job.jid;
+    let res;
+    try { res = await send(job); } catch (e) { res = { error: { message: String(e?.message || e) } }; }
+    inFlight = null;
+    const { error } = res || {};
+    if (error) {
+      if (isNetwork(error)) return; // try again when signal returns
+      // Someone else changed this row since we last saw it: theirs stands, ours is kept aside.
+      const conflict = error.code === 'CA409' || /stale_revision/.test(error.message || '');
+      state.failed = [...state.failed, { ...job, error: error.message, conflict, at: Date.now() }].slice(-30);
+      console.warn('Sync rejected', job, error);
+      done(job);
+      if (conflict) setTimeout(pull, 0);
+      continue;
     }
-  } finally {
-    flushing = false;
+    // The server's new revision becomes the base for the next write of the same row.
+    const revision = res?.data?.[0]?.revision;
+    if (revision != null && job.op === 'upsert') {
+      const id = job.row.id;
+      if (state[job.table][id]) state[job.table] = { ...state[job.table], [id]: { ...state[job.table][id], revision } };
+      state.outbox = state.outbox.map((j) => (j.op === 'upsert' && j.table === job.table && j.row.id === id ? { ...j, base: revision } : j));
+    }
+    done(job);
   }
 }
 
@@ -101,12 +171,12 @@ export async function pull() {
   if (!navigator.onLine) return;
   const { data } = await supabase.auth.getSession();
   if (!data.session) return;
-  const pending = new Set([...state.outbox, ...state.failed].map((j) => j.table + ':' + (j.row?.id || j.id)));
+  const pending = new Set([...state.outbox, ...state.failed.filter((j) => !j.conflict)].map((j) => j.table + ':' + (j.row?.id || j.id)));
   for (const table of TABLES) {
     const { data: rows, error } = await supabase.from(table).select('*').limit(5000);
     if (error) continue;
     const next = {};
-    for (const r of rows) next[r.id] = { ...(state[table][r.id] || {}), ...r };
+    for (const r of rows) if (!r.deleted_at) next[r.id] = { ...(state[table][r.id] || {}), ...r };
     // keep anything not yet sent, and local-only extras
     for (const [id, r] of Object.entries(state[table])) {
       if (pending.has(table + ':' + id) && !next[id]) next[id] = r;
@@ -123,13 +193,15 @@ export async function pull() {
 let channel;
 // Anything the server refused gets another go each time the app opens,
 // so a fix on the server side brings it back rather than losing it.
+// Conflicts aren't retried: the server's newer copy stands.
 function requeueFailed() {
-  if (!state.failed.length) return;
-  for (const job of state.failed) {
+  const retry = state.failed.filter((j) => !j.conflict);
+  if (!retry.length) return;
+  for (const job of retry) {
     if (job.op === 'upsert') state[job.table] = { ...state[job.table], [job.row.id]: job.row };
   }
-  state.outbox = [...state.failed.map(({ error, at, ...j }) => j), ...state.outbox];
-  state.failed = [];
+  state.outbox = [...retry.map(({ error, at, conflict, ...j }) => ({ ...j, jid: uid() })), ...state.outbox];
+  state.failed = state.failed.filter((j) => j.conflict);
   emit();
   persist();
 }

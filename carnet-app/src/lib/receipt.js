@@ -44,13 +44,39 @@ export function parseReceipt(text) {
     if (q) name = +q[1] > 1 ? `${q[2]} ×${q[1]}` : q[2];
     lines.push({ name: name.replace(/\s{2,}/g, ' '), price });
   }
-  const sum = Math.round(lines.reduce((a, b) => a + b.price, 0) * 100) / 100;
+  const c = (n) => Math.round(n * 100);
+  const items = c(lines.filter((l) => !l.service).reduce((a, b) => a + b.price, 0));
+  const service = c(lines.filter((l) => l.service).reduce((a, b) => a + b.price, 0));
+  const sum = (items + service) / 100;
+  // Reconciled only against a total actually printed on the receipt: lines (with any printed
+  // service line), or lines plus a printed service percentage. No total read → unverified.
+  let validation = 'unverified';
+  if (total != null) {
+    const ok = Math.abs(c(total) - (items + service)) <= 1 ||
+      (!service && servicePct && Math.abs(c(total) - Math.round(items * (1 + servicePct / 100))) <= 2);
+    validation = ok ? 'reconciled' : 'difference';
+  }
   return {
     lines,
     total: total ?? sum,
+    printedTotal: total,
     sum,
-    matchesTotal: !!(total == null || Math.abs(total - sum) < 0.05 || (servicePct && Math.abs(total - sum * (1 + servicePct / 100)) < 0.1)),
+    validation,
+    matchesTotal: validation === 'reconciled',
     serviceIncluded,
     servicePct,
+  };
+}
+
+// What the split screen starts from: item lines, a printed service amount kept as its own
+// adjustment (never folded into the tip), and a tip pre-filled only from a printed percentage
+// when no service amount was printed.
+export function splitInputs(r) {
+  const service = (r.lines || []).filter((l) => l.service);
+  const adjustments = service.map((l) => ({ kind: 'service', label: l.name || 'Service', amount: l.price }));
+  return {
+    lines: (r.lines || []).filter((l) => !l.service),
+    adjustments,
+    tipPct: r.serviceIncluded || adjustments.length ? 0 : r.servicePct || 0,
   };
 }

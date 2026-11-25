@@ -1,3 +1,4 @@
+import { toMinor, fromMinor, evenMinor, splitItems } from './minor.js';
 // Who owes whom. Pure functions, easy to test.
 const r2 = (n) => Math.round(n * 100) / 100;
 
@@ -52,27 +53,22 @@ export function pairwise(expenses, settlements = []) {
     });
 }
 
-// Split an amount evenly in cents, so shares always add up exactly.
-export function evenShares(amount, emails) {
-  const cents = Math.round(amount * 100);
-  const base = Math.floor(cents / emails.length);
-  let rem = cents - base * emails.length;
-  return Object.fromEntries(emails.map((e) => [e, (base + (rem-- > 0 ? 1 : 0)) / 100]));
+// Split an amount evenly in minor units, so shares always add up exactly.
+export function evenShares(amount, emails, cur = 'EUR') {
+  const m = evenMinor(toMinor(amount, cur), emails);
+  return Object.fromEntries(emails.map((e) => [e, fromMinor(m[e], cur)]));
 }
 
-// Per-item split with an optional tip shared in proportion; rounding fixed on the payer.
-export function itemShares(lines, tipPct = 0, payer) {
-  const s = {};
-  for (const l of lines) {
-    if (!l.who?.length) continue;
-    const part = evenShares(l.price, l.who);
-    for (const [e, v] of Object.entries(part)) s[e] = (s[e] || 0) + v;
-  }
-  const sub = Object.values(s).reduce((a, b) => a + b, 0);
-  const total = r2(sub * (1 + tipPct / 100));
-  for (const e in s) s[e] = r2(s[e] * (1 + tipPct / 100));
-  const diff = r2(total - Object.values(s).reduce((a, b) => a + b, 0));
-  const fix = payer && s[payer] != null ? payer : Object.keys(s)[0];
-  if (fix && diff) s[fix] = r2(s[fix] + diff);
-  return { shares: s, total };
+// Per-item split with an optional tip shared in proportion (largest remainder, no payer fudge).
+export function itemShares(lines, tipPct = 0, _payer, cur = 'EUR', adjustments = []) {
+  const r = splitItems(
+    lines.map((l) => ({ minor: toMinor(l.price, cur), who: l.who })),
+    adjustments.map((a) => ({ ...a, minor: a.minor ?? toMinor(a.amount, cur) })),
+    tipPct,
+  );
+  return {
+    shares: Object.fromEntries(Object.entries(r.shares).map(([e, v]) => [e, fromMinor(v, cur)])),
+    total: fromMinor(r.total, cur),
+    minor: r,
+  };
 }

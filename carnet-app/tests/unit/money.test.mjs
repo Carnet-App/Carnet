@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { balances, simplify, evenShares, itemShares, pairwise } from '../../src/lib/money.js';
+import { allocate, evenMinor, sharesValid, splitItems, toMinor } from '../../src/lib/minor.js';
 
 const cents = (o) => Object.values(o).reduce((a, b) => a + Math.round(b * 100), 0);
 const rnd = (n) => Math.floor(Math.random() * n);
@@ -46,9 +47,40 @@ test('F5: different currencies are never added together', { todo: 'F5 — balanc
   assert.notDeepEqual(net, { 'a@x': 0, 'b@x': 0 });
 });
 
-test('F7: custom shares that do not add up are refused', { todo: 'F7 — CostSheet accepts shares within 0.01 and stores them unchanged (phase 2 client, phase 5 server)' }, () => {
-  // Mirrors CostSheet's acceptance rule (Money.jsx, commit 991ed65): |sum - amount| < 0.01.
-  const amount = 10, shares = { 'a@x': 3.33, 'b@x': 3.33, 'c@x': 3.33 };
-  const accepted = Math.abs(Object.values(shares).reduce((a, b) => a + b, 0) - amount) < 0.01;
-  assert.equal(accepted && cents(shares) !== Math.round(amount * 100), false, 'a 1p gap is accepted and stored');
+test('F7: custom shares that do not add up are refused', () => {
+  assert.equal(sharesValid(1000, { 'a@x': 333, 'b@x': 333, 'c@x': 333 }), false, 'a 1p gap is refused');
+  assert.equal(sharesValid(1000, { 'a@x': 334, 'b@x': 333, 'c@x': 333 }), true);
+  assert.equal(sharesValid(1000, { 'a@x': 1001, 'b@x': -1 }), false, 'no negative shares');
+});
+
+test('largest remainder: parts are whole, add up exactly and are stable', () => {
+  for (let i = 0; i < 2000; i++) {
+    const total = 1 + rnd(1000000);
+    const w = Object.fromEntries(Array.from({ length: 1 + rnd(8) }, (_, k) => [`p${k}`, 1 + rnd(1000)]));
+    const a = allocate(total, w);
+    assert.equal(Object.values(a).reduce((x, y) => x + y, 0), total);
+    assert.ok(Object.values(a).every(Number.isInteger));
+    assert.deepEqual(allocate(total, w), a);
+    // No part is off from its exact share by a whole unit or more.
+    const sum = Object.values(w).reduce((x, y) => x + y, 0);
+    for (const k in w) assert.ok(Math.abs(a[k] - (total * w[k]) / sum) < 1);
+  }
+});
+
+test('minor units respect each currency', () => {
+  assert.equal(toMinor('12,50', 'EUR'), 1250);
+  assert.equal(toMinor(1.005, 'GBP'), 101);
+  assert.equal(toMinor(1500, 'JPY'), 1500);
+  assert.equal(toMinor(0.1 + 0.2, 'EUR'), 30);
+  assert.deepEqual(evenMinor(1000, ['a', 'b', 'c']), { a: 334, b: 333, c: 333 });
+});
+
+test('itemised split with a printed service line and a tip adds up', () => {
+  for (let i = 0; i < 1000; i++) {
+    const people = ['a@x', 'b@x', 'c@x'];
+    const lines = Array.from({ length: 1 + rnd(8) }, () => ({ minor: 1 + rnd(5000), who: people.filter(() => Math.random() < 0.7) })).filter((l) => l.who.length);
+    if (!lines.length) continue;
+    const r = splitItems(lines, [{ kind: 'service', minor: rnd(2000) }], [0, 5, 10, 12.5][rnd(4)]);
+    assert.equal(Object.values(r.shares).reduce((x, y) => x + y, 0), r.total);
+  }
 });

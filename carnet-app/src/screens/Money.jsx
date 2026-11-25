@@ -1,7 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Seg, Icon, Avatar } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
-import { balances, simplify, pairwise, evenShares, itemShares } from '../lib/money';
+import { balances, simplify, pairwise, itemShares } from '../lib/money';
+import { toMinor, fromMinor, evenMinor, allocate, sharesValid, expenseFields } from '../lib/minor';
+import { splitInputs } from '../lib/receipt';
 import { parseReceipt } from '../lib/receipt';
 import { loadImage, toCanvas, readReceipt, thumbBlob } from '../lib/capture';
 import { storeFile } from '../lib/files';
@@ -22,9 +24,17 @@ export default function Money({ t, me }) {
   const myShare = expenses.reduce((a, e) => a + (+e.shares?.[me] || 0), 0);
   const name = (e) => (e === me ? 'You' : nameOf(members, e));
 
+  // One tap, one settlement: a repeat tap on the same transfer while it saves does nothing.
+  const paying = useRef(new Set());
   function markPaid(x) {
-    if (confirm(`Mark ${money(x.amount, cur)} from ${name(x.from)} to ${name(x.to)} as paid?`))
-      upsert('settlements', { id: uid(), trip_id: trip.id, from_email: x.from, to_email: x.to, amount: x.amount });
+    const key = `${x.from}|${x.to}|${toMinor(x.amount, cur)}`;
+    if (paying.current.has(key)) return;
+    if (!confirm(`Mark ${money(x.amount, cur)} from ${name(x.from)} to ${name(x.to)} as paid?`)) return;
+    paying.current.add(key);
+    setTimeout(() => paying.current.delete(key), 4000);
+    const id = uid();
+    upsert('settlements', { id, client_key: id, trip_id: trip.id, from_email: x.from, to_email: x.to, amount: x.amount,
+      currency: cur, amount_minor: toMinor(x.amount, cur), schema_version: 2 });
   }
 
   return (
@@ -79,20 +89,44 @@ export default function Money({ t, me }) {
 
 function CostSheet({ t, me, e, onClose }) {
   const emails = t.members.map((m) => m.email.toLowerCase());
+  // An edit keeps the cost's own currency (F6); a new cost uses the trip's.
+  const cur = (e?.currency || t.trip.currency || 'EUR').toUpperCase();
+  // The id is fixed when the sheet opens, so a double tap saves the same row twice, not two rows.
+  const [id] = useState(() => e?.id || uid());
   const [title, setTitle] = useState(e?.title || '');
   const [amount, setAmount] = useState(e?.amount ? String(e.amount) : '');
   const [payer, setPayer] = useState(e?.payer_email || me);
-  const [mode, setMode] = useState(e?.method === 'custom' ? 'custom' : 'evenly');
+  // An even split stays even; anything else (custom, from a receipt, by %) opens as the
+  // amounts it actually has, so saving a title change doesn't re-split it evenly (F4).
+  const startShares = e ? e.shares_minor || Object.fromEntries(Object.entries(e.shares || {}).map(([k, v]) => [k, toMinor(v, cur)])) : null;
+  const wasEven = !e || (() => {
+    const ks = Object.keys(startShares);
+    const even = evenMinor(e.amount_minor ?? toMinor(e.amount, cur), ks);
+    return ks.length > 0 && ks.every((k) => even[k] === startShares[k]);
+  })();
+  const [mode, setMode] = useState(wasEven ? 'evenly' : 'custom');
   const [who, setWho] = useState(e ? Object.keys(e.shares || {}) : emails);
-  const [custom, setCustom] = useState(e?.method === 'custom' ? Object.fromEntries(Object.entries(e.shares).map(([k, v]) => [k, String(v)])) : {});
-  const amt = parseFloat(amount.replace(',', '.')) || 0;
-  const customSum = Object.values(custom).reduce((a, v) => a + (parseFloat(String(v).replace(',', '.')) || 0), 0);
-  const ok = title.trim() && amt > 0 && (mode === 'evenly' ? who.length > 0 : Math.abs(customSum - amt) < 0.01);
+  const [custom, setCustom] = useState(wasEven ? {} : Object.fromEntries(Object.entries(startShares).map(([k, v]) => [k, String(fromMinor(v, cur))])));
+  const amtMinor = toMinor(amount, cur);
+  const amt = fromMinor(amtMinor, cur);
+  const customMinor = Object.fromEntries(Object.entries(custom).map(([k, v]) => [k, toMinor(v, cur)]).filter(([, v]) => v));
+  const customSum = fromMinor(Object.values(customMinor).reduce((a, b) => a + b, 0), cur);
+  // Custom shares must add up exactly, to the penny (F7).
+  const ok = title.trim() && amtMinor > 0 && (mode === 'evenly' ? who.length > 0 : sharesValid(amtMinor, customMinor));
+  const changedSplit = !e || mode !== (wasEven ? 'evenly' : 'custom') || amtMinor !== (e.amount_minor ?? toMinor(e.amount, cur)) ||
+    (mode === 'evenly' ? who.join() !== Object.keys(e.shares || {}).join() : JSON.stringify(customMinor) !== JSON.stringify(Object.fromEntries(Object.entries(startShares).filter(([, v]) => v))));
+  const saving = useRef(false);
 
   function save() {
-    const shares = mode === 'evenly' ? evenShares(amt, who) : Object.fromEntries(Object.entries(custom).map(([k, v]) => [k, parseFloat(String(v).replace(',', '.')) || 0]).filter(([, v]) => v));
-    if (!e) notify(t.trip.id, { title: `${nameOf(t.members, me)} added ${title.trim()}`, body: `${money(amt, t.trip.currency)} · you owe ${money(shares[payer === me ? '' : me] || 0, t.trip.currency)}`, tag: 'money' });
-    upsert('expenses', { id: e?.id || uid(), trip_id: t.trip.id, title: title.trim(), amount: amt, currency: t.trip.currency || 'EUR', payer_email: payer, shares, method: mode === 'evenly' ? (who.length === emails.length ? 'evenly' : who.map((x) => nameOf(t.members, x)).join(' + ')) : 'custom' });
+    if (saving.current) return;
+    saving.current = true;
+    const sharesMinor = mode === 'evenly' ? evenMinor(amtMinor, who) : customMinor;
+    const method = !changedSplit ? e.method : mode === 'evenly' ? (who.length === emails.length ? 'evenly' : who.map((x) => nameOf(t.members, x)).join(' + ')) : 'custom';
+    if (!e) notify(t.trip.id, { title: `${nameOf(t.members, me)} added ${title.trim()}`, body: `${money(amt, cur)} · you owe ${money(fromMinor(sharesMinor[me] || 0, cur), cur)}`, tag: 'money' });
+    upsert('expenses', {
+      ...(e || {}), id, client_key: e?.client_key || id, trip_id: t.trip.id, title: title.trim(), payer_email: payer, method,
+      ...expenseFields({ amountMinor: amtMinor, sharesMinor, currency: cur, kind: e?.kind || 'expense', adjustments: changedSplit ? [] : e?.adjustments || [], validation: changedSplit ? 'manual' : e?.validation || 'manual' }),
+    });
     onClose();
   }
 
@@ -107,7 +141,7 @@ function CostSheet({ t, me, e, onClose }) {
           {t.members.map((m) => {
             const k = m.email.toLowerCase();
             const on = who.includes(k);
-            return <button key={m.id} className={'chip' + (on ? ' on' : '')} onClick={() => setWho(on ? who.filter((x) => x !== k) : [...who, k])}>{m.name || m.email}{on && amt ? ' · ' + money(amt / who.length) : ''}</button>;
+            return <button key={m.id} className={'chip' + (on ? ' on' : '')} onClick={() => setWho(on ? who.filter((x) => x !== k) : [...who, k])}>{m.name || m.email}{on && amtMinor ? ' · ' + money(fromMinor(evenMinor(amtMinor, who)[k], cur), cur) : ''}</button>;
           })}
         </div>
       ) : (
@@ -116,7 +150,7 @@ function CostSheet({ t, me, e, onClose }) {
             const k = m.email.toLowerCase();
             return <label key={m.id} className="row" style={{ font: '500 14px var(--sans)' }}><span className="grow">{m.name || m.email}</span><input className="in" style={{ width: 110 }} inputMode="decimal" value={custom[k] || ''} onChange={(x) => setCustom({ ...custom, [k]: x.target.value })} placeholder="0.00" /></label>;
           })}
-          <div className="s">{money(customSum)} of {money(amt)} assigned</div>
+          <div className="s">{money(customSum, cur)} of {money(amt, cur)} assigned</div>
         </div>
       )}
       <button className="btn block" disabled={!ok} onClick={save}>{e ? 'Save' : 'Add cost'}</button>
@@ -129,8 +163,11 @@ function CostSheet({ t, me, e, onClose }) {
 function ReceiptSplit({ t, me, onClose }) {
   const fileRef = useRef();
   const emails = t.members.map((m) => m.email.toLowerCase());
+  const cur = (t.trip.currency || 'EUR').toUpperCase();
+  const [id] = useState(() => uid());
   const [busy, setBusy] = useState('');
   const [r, setR] = useState(null);
+  const [adjustments, setAdjustments] = useState([]);
   const [lines, setLines] = useState([]);
   const [title, setTitle] = useState('');
   const [mode, setMode] = useState('item');
@@ -155,35 +192,45 @@ function ReceiptSplit({ t, me, onClose }) {
       setInspect(log);
       setThumb(await thumbBlob(photo, 900));
       setR(parsed);
-      setLines(parsed.lines.filter((l) => !l.service).map((l) => ({ ...l, who: [...emails] })));
-      // "Service charge (12.5%)" printed on the bill → pre-fill it; "service compris" → none.
-      setTip(parsed.serviceIncluded ? 0 : parsed.servicePct || 0);
+      // A printed service amount is kept as its own line (F1); a printed % with no amount
+      // pre-fills the tip; "service compris" → none.
+      const start = splitInputs(parsed);
+      setLines(start.lines.map((l) => ({ ...l, who: [...emails] })));
+      setAdjustments(start.adjustments);
+      setTip(start.tipPct);
       setTitle(res.text.split('\n').map((s) => s.trim()).find((s) => /[A-Za-z]{3}/.test(s) && s.length < 40) || 'Dinner');
       setBusy('');
     } catch (e) { setBusy('Couldn’t read that: ' + e.message); }
   }
 
-  const sub = lines.reduce((a, l) => a + (+l.price || 0), 0);
+  const sub = fromMinor(lines.reduce((a, l) => a + toMinor(l.price, cur), 0), cur);
+  const adjMinor = adjustments.map((a) => ({ ...a, minor: toMinor(a.amount, cur) }));
   let result;
-  if (mode === 'item') result = itemShares(lines.map((l) => ({ price: +l.price || 0, who: l.who })), tip, payer);
-  else if (mode === 'even') { const tot = Math.round(sub * (1 + tip / 100) * 100) / 100; result = { shares: evenShares(tot, emails), total: tot }; }
+  if (mode === 'item') result = itemShares(lines.map((l) => ({ price: l.price, who: l.who })), tip, payer, cur, adjMinor).minor;
   else {
-    const tot = Math.round(sub * (1 + tip / 100) * 100) / 100;
-    const sum = Object.values(pct).reduce((a, b) => a + b, 0) || 1;
-    const s = Object.fromEntries(emails.map((e) => [e, Math.round((tot * (pct[e] || 0)) / sum * 100) / 100]));
-    const diff = Math.round((tot - Object.values(s).reduce((a, b) => a + b, 0)) * 100) / 100;
-    if (diff) s[payer] = Math.round(((s[payer] || 0) + diff) * 100) / 100;
-    result = { shares: s, total: tot };
+    const base = toMinor(sub, cur) + adjMinor.reduce((a, x) => a + x.minor, 0);
+    const total = base + Math.round((base * tip) / 100);
+    const weights = mode === 'even' ? Object.fromEntries(emails.map((e) => [e, 1])) : Object.fromEntries(emails.map((e) => [e, pct[e] || 0]));
+    result = { shares: allocate(total, weights), total };
   }
+  const shown = (m) => fromMinor(m || 0, cur);
   const unassigned = mode === 'item' && lines.some((l) => !l.who.length);
 
+  // Locked from the first tap: the photo upload takes a moment and a second tap used to add the bill twice (F8).
+  const [sending, setSending] = useState(false);
   async function submit() {
-    const path = thumb ? await storeFile(thumb, { tripId: t.trip.id }) : null;
-    notify(t.trip.id, { title: `${nameOf(t.members, me)} split ${title || 'the bill'}`, body: `${money(result.total, t.trip.currency)} · see your share`, tag: 'money' });
+    if (sending) return;
+    setSending(true);
+    const path = thumb ? await storeFile(thumb, { tripId: t.trip.id }).catch(() => null) : null;
+    notify(t.trip.id, { title: `${nameOf(t.members, me)} split ${title || 'the bill'}`, body: `${money(shown(result.total), cur)} · see your share`, tag: 'money' });
+    // Reconciled only if the lines weren't changed after reading a matching printed total.
+    const edited = JSON.stringify(lines.map((l) => [l.name, toMinor(l.price, cur)])) !== JSON.stringify((r?.lines || []).filter((l) => !l.service).map((l) => [l.name, toMinor(l.price, cur)]));
+    const validation = !r?.validation ? 'manual' : edited ? 'manual' : r.validation;
     upsert('expenses', {
-      id: uid(), trip_id: t.trip.id, title: title || 'Dinner', amount: result.total, currency: t.trip.currency || 'EUR', payer_email: payer,
-      shares: Object.fromEntries(Object.entries(result.shares).filter(([, v]) => v)), method: { item: 'per item, from receipt', even: 'evenly, from receipt', pct: 'by %, from receipt' }[mode],
-      receipt: { lines, tip, serviceIncluded: r?.serviceIncluded }, receipt_path: path,
+      id, client_key: id, trip_id: t.trip.id, title: title || 'Dinner', payer_email: payer,
+      method: { item: 'per item, from receipt', even: 'evenly, from receipt', pct: 'by %, from receipt' }[mode],
+      ...expenseFields({ amountMinor: result.total, sharesMinor: result.shares, currency: cur, adjustments: adjMinor.map(({ kind, label, minor }) => ({ kind, label, amount_minor: minor })), validation }),
+      receipt: { lines, tip, adjustments, serviceIncluded: r?.serviceIncluded }, receipt_path: path,
     });
     onClose();
   }
@@ -230,6 +277,15 @@ function ReceiptSplit({ t, me, onClose }) {
             </div>
             <button className="link" onClick={() => setLines([...lines, { name: '', price: '', who: [...emails] }])}>+ Add a line</button>
           </div>
+          {adjustments.map((a, i) => (
+            <div key={i} className="between">
+              <div><div style={{ font: '500 13px var(--sans)' }}>{a.label || 'Service'} on the bill</div><div className="s">Shared in proportion to what each had</div></div>
+              <div className="row" style={{ gap: 6 }}>
+                <input className="in" inputMode="decimal" style={{ width: 74, height: 36, textAlign: 'right' }} value={a.amount} onChange={(e) => setAdjustments(adjustments.map((x, j) => (j === i ? { ...x, amount: e.target.value.replace(',', '.') } : x)))} aria-label="Service amount" />
+                <button className="link" onClick={() => setAdjustments(adjustments.filter((_, j) => j !== i))}>Remove</button>
+              </div>
+            </div>
+          ))}
           {mode === 'pct' && (
             <div className="col">
               {t.members.map((m) => {
@@ -247,18 +303,19 @@ function ReceiptSplit({ t, me, onClose }) {
               {[0, 5, 10, 12.5].map((x) => <button key={x} className={'chip' + (tip === x ? ' on' : '')} style={{ padding: '7px 9px', fontSize: 12 }} onClick={() => setTip(x)}>{x ? x + '%' : 'None'}</button>)}
             </div>
           </div>
-          {r.total && !r.matchesTotal && <div className="card dashed s">The receipt’s total says {money(r.total)}, the lines add up to {money(sub)}. Check for a missed or misread line.</div>}
+          {r.validation === 'difference' && <div className="card dashed s">The receipt’s total says {money(r.printedTotal, cur)}, the lines add up to {money(r.sum, cur)}. Check for a missed or misread line.</div>}
+          {r.validation === 'unverified' && r.lines?.length > 0 && <div className="card dashed s">No total found on the receipt, so these lines couldn’t be checked against it. Worth a quick look.</div>}
           <div className="card dark col">
-            <div className="between"><span className="k" style={{ color: 'var(--gold)' }}>Total {money(result.total)}</span>{tip ? <span className="s" style={{ color: '#B7AC9C' }}>incl. {tip}% tip</span> : null}</div>
+            <div className="between"><span className="k" style={{ color: 'var(--gold)' }}>Total {money(shown(result.total), cur)}</span>{tip ? <span className="s" style={{ color: '#B7AC9C' }}>incl. {tip}% tip</span> : null}</div>
             <div className="row wrap">
               {t.members.map((m) => (
                 <div key={m.id} style={{ flex: '1 1 90px', background: '#2B2621', borderRadius: 12, padding: '8px 10px' }}>
                   <div className="s" style={{ color: '#B7AC9C' }}>{m.name || m.email}</div>
-                  <div style={{ font: '500 19px var(--serif)' }}>{money(result.shares[m.email.toLowerCase()] || 0)}</div>
+                  <div style={{ font: '500 19px var(--serif)' }}>{money(shown(result.shares[m.email.toLowerCase()]), cur)}</div>
                 </div>
               ))}
             </div>
-            <button className="btn gold block" disabled={unassigned || !result.total} onClick={submit}>{unassigned ? 'Give every line a name first' : 'Submit to trip expenses →'}</button>
+            <button className="btn gold block" disabled={unassigned || !result.total || sending} onClick={submit}>{unassigned ? 'Give every line a name first' : sending ? 'Adding…' : 'Submit to trip expenses →'}</button>
           </div>
           <InspectPanel data={inspect} />
         </>
