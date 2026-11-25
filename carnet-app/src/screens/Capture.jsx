@@ -37,16 +37,16 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         const t0 = performance.now();
         const isVideo = file.type.startsWith('video');
         const of = files.length > 1 ? ` (${i + 1} of ${files.length})` : '';
-        setProgress(isVideo ? 'Watching the recording for names on screen…' : `Reading the image${of}…`);
+        setProgress(isVideo ? 'Watching the recording for names on screen…' : `Reading the ${/pdf/i.test(file.type) || /\.pdf$/i.test(file.name) ? 'PDF' : 'image'}${of}…`);
         const r = isVideo ? await readVideo(file, (p) => setProgress(`Watching the recording… ${Math.round(p * 100)}%`)) : await readImage(file);
         const thumb = r.canvas ? await thumbBlob(r.canvas) : null;
         // A post screenshot: caption first, words on the photo second, and the photo itself
         // (not the whole screen) as the place's picture.
-        const post = !isVideo && r.canvas ? postLayout(r.lines, r.height) : null;
+        const post = !isVideo && !r.pdf && r.canvas ? postLayout(r.lines, r.height) : null;
         const photo = post ? await thumbBlob(r.canvas, 900, post.media) : null;
         const first = notTheAccount(r.lines?.length ? firstLine({ post, lines: r.lines, height: r.height, text: r.text }) : venueCandidates(r.text), post?.handle);
         let overlay = { text: '', lines: [] };
-        if (!isVideo && r.canvas && (post || !isStrong(first))) {
+        if (!isVideo && !r.pdf && r.canvas && (post || !isStrong(first))) {
           setProgress(`${post ? 'Reading the caption and the photo' : 'Looking at text inside the pictures'}${of}…`);
           overlay = await readOverlay(r.canvas, post ? post.media : { y0: 0, y1: r.canvas.height }).catch(() => ({ text: '', lines: [] }));
         }
@@ -235,7 +235,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
             <span><div className="n" style={{ color: '#F3EEE6' }}>Screenshot, photo or screen recording</div><div className="s" style={{ color: '#B7AC9C' }}>Posts, carousels, reels, tickets — pick several at once</div></span>
             <Icon n="camera" color="#E2B36A" />
           </button>
-          <input ref={fileRef} type="file" accept="image/*,video/*" multiple hidden onChange={(e) => fromFiles(e.target.files)} />
+          <input ref={fileRef} type="file" accept="image/*,video/*,application/pdf,.pdf" multiple hidden onChange={(e) => fromFiles(e.target.files)} />
           <label className="f">Or paste a link — Instagram, a venue, a ticket page
             <div className="row">
               <input className="in" value={link} onChange={(e) => setLink(e.target.value)} placeholder="https://instagram.com/p/…" />

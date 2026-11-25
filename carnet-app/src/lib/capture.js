@@ -355,7 +355,69 @@ export async function readReceipt(src, onProgress) {
   return { text: pick.text, conf: pick.conf, angle: best.angle, canvas: pick.canvas, prep: pick.prep, recovered: pick.recovered || 0, corrections };
 }
 
+// PDFs (e-tickets, booking confirmations, bills): each page drawn on the phone. The PDF's own text
+// is used when it has one (exact, and instant); only a scanned PDF is read with OCR.
+export const isPdf = (file) => file?.type === 'application/pdf' || /\.pdf$/i.test(file?.name || '');
+async function pdfDoc(file) {
+  const pdfjs = await import('pdfjs-dist/legacy/build/pdf.mjs');
+  if (!pdfjs.GlobalWorkerOptions.workerSrc) pdfjs.GlobalWorkerOptions.workerSrc = (await import('pdfjs-dist/legacy/build/pdf.worker.min.mjs?url')).default;
+  return pdfjs.getDocument({ data: new Uint8Array(await file.arrayBuffer()) }).promise;
+}
+export async function pdfPages(file, { maxPages = 4, width = 1600 } = {}) {
+  const doc = await pdfDoc(file);
+  const out = [];
+  for (let n = 1; n <= Math.min(doc.numPages, maxPages); n++) {
+    const page = await doc.getPage(n);
+    const base = page.getViewport({ scale: 1 });
+    const vp = page.getViewport({ scale: width / base.width });
+    const c = document.createElement('canvas');
+    c.width = Math.round(vp.width); c.height = Math.round(vp.height);
+    const g = c.getContext('2d');
+    g.fillStyle = '#fff'; g.fillRect(0, 0, c.width, c.height);
+    await page.render({ canvasContext: g, viewport: vp }).promise;
+    const tc = await page.getTextContent();
+    // The text layer as lines, top to bottom, in the same shape OCR gives.
+    const rows = [];
+    for (const it of tc.items) {
+      if (!it.str?.trim()) continue;
+      const [x, yUp] = vp.convertToViewportPoint(it.transform[4], it.transform[5]);
+      const h = Math.abs(it.transform[3]) * vp.scale;
+      const y = yUp - h;
+      const row = rows.find((r) => Math.abs(r.y - y) < h * 0.5);
+      if (row) row.parts.push({ x, s: it.str }); else rows.push({ y, h, parts: [{ x, s: it.str }] });
+    }
+    rows.sort((a, b) => a.y - b.y);
+    const lines = rows.map((r) => ({ text: r.parts.sort((a, b) => a.x - b.x).map((p) => p.s).join(' ').replace(/\s+/g, ' ').trim(), y: r.y, h: r.h, x: Math.min(...r.parts.map((p) => p.x)), w: 0, conf: 99 }));
+    out.push({ canvas: c, lines, text: lines.map((l) => l.text).join('\n') });
+  }
+  return out;
+}
+// A QR code anywhere on the first pages, read sharp (tickets often put it small, or on page 2).
+export async function pdfTicket(file) {
+  const pages = await pdfPages(file, { width: 2000 });
+  let qr = null;
+  for (const p of pages) { qr = readQR(p.canvas); if (qr) break; }
+  return { qr, canvas: pages[0]?.canvas, text: pages.map((p) => p.text).join('\n') };
+}
+export async function readPdf(file, onProgress) {
+  onProgress?.('Opening the PDF…');
+  const pages = await pdfPages(file, { width: 1600 });
+  if (!pages.length) throw new Error('that PDF has no pages');
+  let qr = null;
+  for (const p of pages) { qr = readQR(p.canvas); if (qr) break; }
+  if (!qr) for (const p of (await pdfPages(file, { width: 2400, maxPages: 2 }))) { qr = readQR(p.canvas); if (qr) break; }
+  const first = pages[0];
+  if (pages.some((p) => p.text.trim().length > 20)) {
+    const text = pages.map((p) => p.text).join('\n');
+    return { text, lines: first.lines, height: first.canvas.height, qr, canvas: first.canvas, pdf: true };
+  }
+  // A scanned PDF: read the first page like a photo.
+  const { text, lines, height } = await readText(first.canvas, onProgress);
+  return { text, lines, height, qr, canvas: first.canvas, pdf: true };
+}
+
 export async function readImage(file, onProgress) {
+  if (isPdf(file)) return readPdf(file, onProgress);
   const { img, url } = await loadImage(file);
   const canvas = toCanvas(img);
   const qr = readQR(canvas);

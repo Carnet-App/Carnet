@@ -25,7 +25,7 @@ export default defineConfig({
       workbox: {
         // Everything the app needs to open and split a bill with no signal,
         // including the on-device text reader (≈25 MB, downloaded once).
-        globPatterns: ['**/*.{js,css,html,png,ttf,wasm,gz}', 'ocr/**/*'],
+        globPatterns: ['**/*.{js,mjs,css,html,png,ttf,wasm,gz}', 'ocr/**/*'],
         maximumFileSizeToCacheInBytes: 16 * 1024 * 1024,
         importScripts: ['/push-sw.js'],
         navigateFallback: '/index.html',

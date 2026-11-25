@@ -1,5 +1,5 @@
 import { useState, useRef } from 'react';
-import { loadImage, toCanvas, readQR, thumbBlob } from '../lib/capture';
+import { loadImage, toCanvas, readQR, thumbBlob, isPdf, pdfTicket } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { Sheet, Seg, Icon } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
@@ -133,11 +133,19 @@ function TicketField({ f, set, tripId }) {
     if (!file) return;
     setBusy('Reading the ticket…');
     try {
-      const { img } = await loadImage(file);
-      // Small codes need the full resolution; try that, then a smaller copy (blur helps some).
-      let qr = null;
-      for (const w of [3000, 1600, 900]) { qr = readQR(toCanvas(img, w)); if (qr) break; }
-      const path = await storeFile(await thumbBlob(toCanvas(img, 1600), 1200), { tripId });
+      let qr = null, page;
+      if (isPdf(file)) {
+        // An e-ticket PDF: the code is read from the PDF itself, sharp at any size.
+        const t = await pdfTicket(file);
+        qr = t.qr; page = t.canvas;
+        if (!page) throw new Error('that PDF has no pages');
+      } else {
+        const { img } = await loadImage(file);
+        // Small codes need the full resolution; try that, then a smaller copy (blur helps some).
+        for (const w of [3000, 1600, 900]) { qr = readQR(toCanvas(img, w)); if (qr) break; }
+        page = toCanvas(img, 1600);
+      }
+      const path = await storeFile(await thumbBlob(page, 1200), { tripId });
       set('qr_text', qr);
       set('attachment_path', path);
       if (f.status !== 'booked') set('status', 'booked');
@@ -153,8 +161,8 @@ function TicketField({ f, set, tripId }) {
           <button className="link" onClick={() => { set('qr_text', null); set('attachment_path', null); setBusy(''); }}>Remove</button>
         </div>
       )}
-      <button className="btn ghost block" onClick={() => ref.current?.click()}>{f.qr_text || f.attachment_path ? 'Replace ticket' : 'Add ticket (screenshot or photo)'}</button>
-      <input ref={ref} type="file" accept="image/*" hidden onChange={(e) => { add(e.target.files?.[0]); e.target.value = ''; }} />
+      <button className="btn ghost block" onClick={() => ref.current?.click()}>{f.qr_text || f.attachment_path ? 'Replace ticket' : 'Add ticket (PDF, screenshot or photo)'}</button>
+      <input ref={ref} type="file" accept="image/*,application/pdf,.pdf" hidden onChange={(e) => { add(e.target.files?.[0]); e.target.value = ''; }} />
       {busy && <div className="s">{busy}</div>}
     </div>
   );
