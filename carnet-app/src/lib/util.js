@@ -152,3 +152,47 @@ export const similarity = (a, b) => nameMatch(a, b);
 
 export const nameOf = (members, email) =>
   members.find((m) => m.email?.toLowerCase() === email?.toLowerCase())?.name || (email || '?').split('@')[0];
+
+// ── Tickets ───────────────────────────────────────────────────────────
+// A plan can hold several tickets (one each, a ticket per night). The first also lives in
+// qr_text / attachment_path, which older copies of the app read; the full list is in `tickets`.
+export function ticketsOf(it) {
+  if (Array.isArray(it?.tickets) && it.tickets.length) return it.tickets.filter((k) => k && (k.qr || k.path));
+  return it?.qr_text || it?.attachment_path ? [{ qr: it.qr_text || null, path: it.attachment_path || null }] : [];
+}
+export function ticketFields(list) {
+  const first = list[0] || {};
+  return { qr_text: first.qr || null, attachment_path: first.path || null, tickets: list.length > 1 ? list : null };
+}
+
+// ── Ideas: where and when ─────────────────────────────────────────────
+// The area a place is in, from its address: Paris arrondissements from the postcode
+// ("75011" → "11e"), otherwise the first part that isn't the street, a postcode or the city.
+export function areaOf(address, city = '') {
+  if (!address) return null;
+  const arr = address.match(/\b75(?:0(\d\d)|116)\b/);
+  if (arr) { const n = arr[1] ? +arr[1] : 16; if (n >= 1 && n <= 20) return n === 1 ? '1er' : n + 'e'; }
+  const skip = new RegExp(`^(${[city, 'france', 'germany', 'deutschland', 'spain', 'españa', 'united kingdom', 'uk', 'england', 'netherlands', 'nederland', 'île-de-france', 'ile-de-france', 'paris', 'metropolitan france', 'france métropolitaine'].filter(Boolean).map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|')})$`, 'i');
+  const parts = address.split(',').map((s) => s.trim()).filter(Boolean);
+  const hit = parts.slice(1).find((p) => !/\d/.test(p) && !skip.test(p) && p.length <= 28 && !/arrondissement/i.test(p));
+  if (hit) return hit;
+  const ar = address.match(/(\d{1,2})(?:e|er|ème)\s+arrondissement/i);
+  return ar ? (+ar[1] === 1 ? '1er' : ar[1] + 'e') : null;
+}
+
+// When in the day an idea suits: from what it is, nudged by its name and notes.
+export const SLOTS = [
+  { key: 'morning', label: 'Morning', hint: 'coffee, markets, brunch' },
+  { key: 'day', label: 'Afternoon', hint: 'restaurants, wandering, culture' },
+  { key: 'evening', label: 'Evening', hint: 'dinner, drinks' },
+  { key: 'late', label: 'Late', hint: 'dancing, last drinks' },
+  { key: 'any', label: 'Any time', hint: '' },
+];
+export function slotOf(it) {
+  const text = `${it.title || ''} ${it.notes || ''}`.toLowerCase();
+  if (/brunch|breakfast|petit[- ]d[ée]j|bakery|boulangerie|march[ée]\b|market|puces|flea|croissant/.test(text)) return 'morning';
+  if (/\b(club|rave|techno|disco)\b|after ?party/.test(text)) return 'late';
+  if (/\b(lunch|d[ée]jeuner)\b/.test(text)) return 'day';
+  if (/\b(dinner|d[îi]ner|cocktail|wine bar|bar [àa] vin|apéro|apero)\b/.test(text)) return 'evening';
+  return { coffee: 'morning', explore: 'day', culture: 'day', eat: 'day', drink: 'evening', dance: 'late' }[it.category] || 'any';
+}

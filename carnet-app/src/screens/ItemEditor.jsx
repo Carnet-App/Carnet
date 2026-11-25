@@ -3,20 +3,20 @@ import { loadImage, toCanvas, readQR, thumbBlob, isPdf, pdfTicket } from '../lib
 import { storeFile } from '../lib/files';
 import { Sheet, Seg, Icon } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
-import { CATS, daysBetween, dayLabel, findVenue, guessCategory } from '../lib/util';
+import { CATS, daysBetween, dayLabel, findVenue, guessCategory, ticketsOf, ticketFields } from '../lib/util';
 import { needsApproval, propose, announce } from '../lib/proposals';
 
 // Add or edit something on the trip: from the guide, a search, or typed in.
-export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
+export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, onClose }) {
   const { trip, places } = t;
   const days = daysBetween(trip.start_date, trip.end_date);
   const [f, setF] = useState(() => {
     const b = {
       title: '', category: 'explore', day: days[0], start_time: '', end_time: '', visibility: 'shared', status: 'planned',
       notes: '', booking_ref: '', place_id: null, lat: null, lng: null, address: '',
-      ...preset, ...(item || {}),
+      ...preset, ...(item || {}), ...overrides,
     };
-    return { ...b, start_time: (b.start_time || '').slice(0, 5), end_time: (b.end_time || '').slice(0, 5) };
+    return { ...b, tickets: ticketsOf(b), start_time: (b.start_time || '').slice(0, 5), end_time: (b.end_time || '').slice(0, 5) };
   });
   const [q, setQ] = useState('');
   const [res, setRes] = useState([]);
@@ -43,7 +43,7 @@ export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
       id, trip_id: trip.id, place_id: f.place_id, category: f.category, day: f.day || null,
       start_time: f.start_time || null, end_time: f.end_time || null, visibility: f.visibility, status: f.status,
       lat: f.lat, lng: f.lng, address: f.address || null, booking_ref: f.booking_ref || null,
-      qr_text: f.qr_text || null, attachment_path: f.attachment_path || null, attachment_local: f.attachment_local,
+      ...ticketFields(f.tickets), attachment_local: f.attachment_local,
     };
     const after = { ...row, title: f.title.trim(), notes: f.notes || null };
     if (needsApproval(t, item, after)) {
@@ -129,40 +129,61 @@ export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
 function TicketField({ f, set, tripId }) {
   const ref = useRef();
   const [busy, setBusy] = useState('');
-  async function add(file) {
-    if (!file) return;
-    setBusy('Reading the ticket…');
-    try {
-      let qr = null, page;
-      if (isPdf(file)) {
-        // An e-ticket PDF: the code is read from the PDF itself, sharp at any size.
-        const t = await pdfTicket(file);
-        qr = t.qr; page = t.canvas;
-        if (!page) throw new Error('that PDF has no pages');
-      } else {
-        const { img } = await loadImage(file);
-        // Small codes need the full resolution; try that, then a smaller copy (blur helps some).
-        for (const w of [3000, 1600, 900]) { qr = readQR(toCanvas(img, w)); if (qr) break; }
-        page = toCanvas(img, 1600);
-      }
-      const path = await storeFile(await thumbBlob(page, 1200), { tripId });
-      set('qr_text', qr);
-      set('attachment_path', path);
-      if (f.status !== 'booked') set('status', 'booked');
-      setBusy(qr ? '' : 'No QR code found on that. The image is saved and shows in Wallet.');
-    } catch (e) { setBusy('Couldn’t read that: ' + e.message); }
+  const list = f.tickets || [];
+  async function read(file) {
+    let qr = null, page;
+    if (isPdf(file)) {
+      // An e-ticket PDF: the code is read from the PDF itself, sharp at any size.
+      const t = await pdfTicket(file);
+      qr = t.qr; page = t.canvas;
+      if (!page) throw new Error('that PDF has no pages');
+    } else {
+      const { img } = await loadImage(file);
+      // Small codes need the full resolution; try that, then a smaller copy (blur helps some).
+      for (const w of [3000, 1600, 900]) { qr = readQR(toCanvas(img, w)); if (qr) break; }
+      page = toCanvas(img, 1600);
+    }
+    const path = await storeFile(await thumbBlob(page, 1200), { tripId });
+    return { qr: qr || null, path };
   }
+  // Several at once: one PDF per person, or a screenshot of each ticket.
+  async function add(files) {
+    if (!files.length) return;
+    const got = [], missed = [];
+    for (const [i, file] of files.entries()) {
+      setBusy(files.length > 1 ? `Reading ticket ${i + 1} of ${files.length}…` : 'Reading the ticket…');
+      try {
+        const k = await read(file);
+        // The same ticket added twice (same code) is kept once.
+        if (k.qr && [...list, ...got].some((x) => x.qr === k.qr)) { missed.push(`${file.name}: already added`); continue; }
+        got.push(k);
+      } catch (e) { missed.push(`${file.name}: ${e.message}`); }
+    }
+    if (got.length) {
+      set('tickets', [...list, ...got]);
+      if (f.status !== 'booked') set('status', 'booked');
+    }
+    const noQr = got.filter((k) => !k.qr).length;
+    setBusy([noQr && `${noQr === got.length && got.length === 1 ? 'No QR code found on that' : `${noQr} without a QR code`}. The image is saved and shows in Wallet.`, missed.length && `Couldn’t add ${missed.join('; ')}`].filter(Boolean).join(' '));
+  }
+  const move = (i, d) => { const n = [...list]; [n[i], n[i + d]] = [n[i + d], n[i]]; set('tickets', n); };
   return (
     <div className="col" style={{ gap: 6 }}>
-      <label className="f">Ticket</label>
-      {(f.qr_text || f.attachment_path) && (
-        <div className="between card" style={{ padding: '10px 12px' }}>
-          <div className="s">{f.qr_text ? 'QR code saved · shows in Wallet, works offline' : 'Ticket image saved · shows in Wallet'}</div>
-          <button className="link" onClick={() => { set('qr_text', null); set('attachment_path', null); setBusy(''); }}>Remove</button>
+      <label className="f">{list.length > 1 ? `Tickets · ${list.length}` : 'Ticket'}</label>
+      {list.length > 0 && (
+        <div className="card" style={{ padding: 0 }}>
+          {list.map((k, i) => (
+            <div key={(k.qr || k.path) + i} className="between" style={{ padding: '10px 12px', borderTop: i ? '1px solid var(--line)' : 0 }}>
+              <div className="s" style={{ flex: 1 }}>{list.length > 1 && <b style={{ color: 'var(--ink)' }}>{i + 1}. </b>}{k.qr ? 'QR code · works offline' : 'Ticket image'}</div>
+              {list.length > 1 && i > 0 && <button className="link" onClick={() => move(i, -1)} aria-label="Move up">↑</button>}
+              <button className="link" onClick={() => { set('tickets', list.filter((_, j) => j !== i)); setBusy(''); }}>Remove</button>
+            </div>
+          ))}
         </div>
       )}
-      <button className="btn ghost block" onClick={() => ref.current?.click()}>{f.qr_text || f.attachment_path ? 'Replace ticket' : 'Add ticket (PDF, screenshot or photo)'}</button>
-      <input ref={ref} type="file" accept="image/*,application/pdf,.pdf" hidden onChange={(e) => { add(e.target.files?.[0]); e.target.value = ''; }} />
+      <button className="btn ghost block" onClick={() => ref.current?.click()}>{list.length ? '+ Add another ticket' : 'Add tickets (PDF, screenshot or photo)'}</button>
+      <input ref={ref} type="file" accept="image/*,application/pdf,.pdf" multiple hidden onChange={(e) => { add([...(e.target.files || [])]); e.target.value = ''; }} />
+      {list.length === 0 && <div className="s">Pick several at once for a ticket per person.</div>}
       {busy && <div className="s">{busy}</div>}
     </div>
   );

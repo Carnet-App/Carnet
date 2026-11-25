@@ -2,7 +2,7 @@ import { useState } from 'react';
 import DayView from './DayView';
 import Proposals, { ProposalBanner } from './Proposals';
 import ItemEditor from './ItemEditor';
-import { CatTag, StatusPill } from '../ui';
+import Ideas from './Ideas';
 import { daysBetween, dayLabel, tripNow } from '../lib/util';
 
 export default function Plan({ t, me, open }) {
@@ -31,17 +31,8 @@ export default function Plan({ t, me, open }) {
       <ProposalBanner t={t} onOpen={() => setReview(true)} />
       {review && <Proposals t={t} onClose={() => setReview(false)} />}
       <DayView t={t} me={me} day={day} />
-      {unscheduled.length > 0 && (
-        <>
-          <div className="k mute" style={{ marginTop: 10 }}>Ideas with no day yet</div>
-          {unscheduled.map((it) => (
-            <button key={it.id} className="card between" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => setAdd({ item: it })}>
-              <span><CatTag c={it.category} /><div className="n">{it.title}</div></span><StatusPill s={it.status} />
-            </button>
-          ))}
-        </>
-      )}
-      {add && <ItemEditor t={t} me={me} item={add.item} preset={add.preset} onClose={() => setAdd(null)} />}
+      {unscheduled.length > 0 && <Ideas t={t} ideas={unscheduled} day={day} onOpen={(it, overrides) => setAdd({ item: it, overrides })} />}
+      {add && <ItemEditor t={t} me={me} item={add.item} preset={add.preset} overrides={add.overrides} onClose={() => setAdd(null)} />}
     </div>
   );
 }

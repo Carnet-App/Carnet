@@ -126,7 +126,16 @@ async function send(job) {
   }
   if (job.op === 'delete') return supabase.from(job.table).delete().eq('id', job.id);
   const row = clean(job.table, job.row);
-  if (!VERSIONED.has(job.table)) return supabase.from(job.table).upsert(row);
+  if (!VERSIONED.has(job.table)) {
+    const res = await supabase.from(job.table).upsert(row);
+    // Before the tickets database script runs, the server doesn't know `tickets` yet: send the
+    // rest (the first ticket is in qr_text / attachment_path); the full list stays on this phone.
+    if (res.error && 'tickets' in row && /tickets/.test(res.error.message || '')) {
+      const { tickets, ...rest } = row;
+      return supabase.from(job.table).upsert(rest);
+    }
+    return res;
+  }
   delete row.last_op_id;
   const versioned = { ...row, op_id: job.jid, base_revision: job.base ?? null };
   let res = await supabase.from(job.table).upsert(versioned).select('revision');
