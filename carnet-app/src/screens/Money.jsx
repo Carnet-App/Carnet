@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react';
 import { Sheet, Seg, Icon, Avatar } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
 import { simplify, pairwise, itemShares, ledgers } from '../lib/money';
-import { toMinor, fromMinor, evenMinor, allocate, sharesValid, expenseFields } from '../lib/minor';
+import { toMinor, fromMinor, evenMinor, allocate, sharesValid, expenseFields, ownGroupOf, ownRows } from '../lib/minor';
 import { splitInputs, checkTotal } from '../lib/receipt';
 import { parseReceipt, believability } from '../lib/receipt';
 import { loadImage, toCanvas, readReceipt, thumbBlob, uprightCopy, readWithPaddle } from '../lib/capture';
@@ -27,6 +27,20 @@ export default function Money({ t, me }) {
   const head = books[0] || { currency: cur, total: 0, mine: 0 };
   const transfers = books.flatMap((l) => l.transfers);
   const name = (e) => (e === me ? 'You' : nameOf(members, e));
+  // "Each paid their own" rows show as one line per bill.
+  const listed = useMemo(() => {
+    const out = [], groups = new Map();
+    for (const e of expenses) {
+      const g = ownGroupOf(e);
+      if (!g) { out.push(e); continue; }
+      let row = groups.get(g);
+      if (!row) { row = { own: true, key: g, title: e.title, currency: e.currency, rows: [], amount: 0, mine: 0 }; groups.set(g, row); out.push(row); }
+      row.rows.push(e);
+      row.amount = Math.round((row.amount + (+e.amount || 0)) * 100) / 100;
+      if (e.payer_email === me) row.mine = +e.amount || 0;
+    }
+    return out;
+  }, [expenses, me]);
 
   // One tap, one settlement: a repeat tap on the same transfer while it saves does nothing.
   const paying = useRef(new Set());
@@ -80,7 +94,13 @@ export default function Money({ t, me }) {
 
       <div className="card" style={{ padding: '2px 14px' }}>
         <div className="list">
-          {expenses.map((e) => (
+          {listed.map((e) => e.own ? (
+            <button key={e.key} className="li" style={{ width: '100%', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => setAdd({ own: e.rows })}>
+              <span style={{ width: 26, height: 26, borderRadius: 13, background: '#E1F0E8', color: '#24563F', display: 'grid', placeItems: 'center', font: '600 11px var(--sans)', flex: 'none' }}>{e.rows.length}</span>
+              <div className="grow"><div className="n" style={{ fontSize: 16 }}>{e.title}</div><div className="s">each paid their own · {e.rows.map((r) => r.payer_email === me ? 'you' : nameOf(members, r.payer_email)).join(', ')}</div></div>
+              <div style={{ textAlign: 'right' }}><div style={{ font: '600 13px var(--sans)' }}>{money(e.amount, e.currency)}</div><div className="s">you {money(e.mine, e.currency)}</div></div>
+            </button>
+          ) : (
             <button key={e.id} className="li" style={{ width: '100%', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => setAdd(e)}>
               <Avatar name={nameOf(members, e.payer_email)} i={Math.max(0, members.findIndex((m) => m.email === e.payer_email))} size={26} />
               <div className="grow"><div className="n" style={{ fontSize: 16 }}>{e.title}</div><div className="s">{name(e.payer_email)} paid · {e.method || 'evenly'}</div></div>
@@ -93,20 +113,21 @@ export default function Money({ t, me }) {
       {settlements.length > 0 && <div className="s">{settlements.length} payment{settlements.length > 1 ? 's' : ''} marked as paid.</div>}
       <div className="s" style={{ textAlign: 'center', opacity: 0.5, fontSize: 12, marginTop: 24 }}>Version {__BUILD__} UTC</div>
 
-      {add && <CostSheet t={t} me={me} e={add.id ? add : null} onClose={() => setAdd(null)} />}
+      {add && <CostSheet t={t} me={me} e={add.id ? add : null} own={add.own || null} onClose={() => setAdd(null)} />}
       {scan && <ReceiptSplit t={t} me={me} onClose={() => setScan(false)} />}
     </div>
   );
 }
 
-function CostSheet({ t, me, e, onClose }) {
+function CostSheet({ t, me, e: e0, own, onClose }) {
+  const e = e0 || (own ? own[0] : null);
   const emails = t.members.map((m) => m.email.toLowerCase());
   // An edit keeps the cost's own currency (F6); a new cost uses the trip's.
   const cur = (e?.currency || t.trip.currency || 'EUR').toUpperCase();
   // The id is fixed when the sheet opens, so a double tap saves the same row twice, not two rows.
   const [id] = useState(() => e?.id || uid());
   const [title, setTitle] = useState(e?.title || '');
-  const [amount, setAmount] = useState(e?.amount ? String(e.amount) : '');
+  const [amount, setAmount] = useState(own ? String(Math.round(own.reduce((a, r) => a + (+r.amount || 0), 0) * 100) / 100) : e?.amount ? String(e.amount) : '');
   const [payer, setPayer] = useState(e?.payer_email || me);
   // An even split stays even; anything else (custom, from a receipt, by %) opens as the
   // amounts it actually has, so saving a title change doesn't re-split it evenly (F4).
@@ -116,7 +137,10 @@ function CostSheet({ t, me, e, onClose }) {
     const even = evenMinor(e.amount_minor ?? toMinor(e.amount, cur), ks);
     return ks.length > 0 && ks.every((k) => even[k] === startShares[k]);
   })();
-  const [mode, setMode] = useState(wasEven ? 'evenly' : 'custom');
+  const [mode, setMode] = useState(own ? 'own' : wasEven ? 'evenly' : 'custom');
+  const [ownAmts, setOwnAmts] = useState(() => own ? Object.fromEntries(own.map((r) => [r.payer_email, String(r.amount)])) : {});
+  const ownMinor = Object.fromEntries(Object.entries(ownAmts).map(([k, v]) => [k, toMinor(v, cur)]).filter(([, v]) => v > 0));
+  const ownTotal = Object.values(ownMinor).reduce((a, b) => a + b, 0);
   const [who, setWho] = useState(e ? Object.keys(e.shares || {}) : emails);
   const [custom, setCustom] = useState(wasEven ? {} : Object.fromEntries(Object.entries(startShares).map(([k, v]) => [k, String(fromMinor(v, cur))])));
   const amtMinor = toMinor(amount, cur);
@@ -124,7 +148,7 @@ function CostSheet({ t, me, e, onClose }) {
   const customMinor = Object.fromEntries(Object.entries(custom).map(([k, v]) => [k, toMinor(v, cur)]).filter(([, v]) => v));
   const customSum = fromMinor(Object.values(customMinor).reduce((a, b) => a + b, 0), cur);
   // Custom shares must add up exactly, to the penny (F7).
-  const ok = title.trim() && amtMinor > 0 && (mode === 'evenly' ? who.length > 0 : sharesValid(amtMinor, customMinor));
+  const ok = title.trim() && (mode === 'own' ? ownTotal > 0 : amtMinor > 0 && (mode === 'evenly' ? who.length > 0 : sharesValid(amtMinor, customMinor)));
   const changedSplit = !e || mode !== (wasEven ? 'evenly' : 'custom') || amtMinor !== (e.amount_minor ?? toMinor(e.amount, cur)) ||
     (mode === 'evenly' ? who.join() !== Object.keys(e.shares || {}).join() : JSON.stringify(customMinor) !== JSON.stringify(Object.fromEntries(Object.entries(startShares).filter(([, v]) => v))));
   const saving = useRef(false);
@@ -132,11 +156,21 @@ function CostSheet({ t, me, e, onClose }) {
   function save() {
     if (saving.current) return;
     saving.current = true;
+    if (mode === 'own') {
+      const { rows, drop } = ownRows({ group: (own && ownGroupOf(own[0])) || id, existing: own || (e ? [e] : []), title: title.trim(), currency: cur, amounts: ownMinor, tripId: t.trip.id, newId: uid });
+      rows.forEach((r) => upsert('expenses', r));
+      drop.forEach((x) => remove('expenses', x));
+      if (!e) notify(t.trip.id, { title: `${nameOf(t.members, me)} added ${title.trim()}`, body: `${money(fromMinor(ownTotal, cur), cur)} · each paid their own`, tag: 'money' });
+      onClose();
+      return;
+    }
+    // Was "each paid their own", now split: the other people's rows go, this one carries the bill.
+    if (own) own.filter((r) => r.id !== id).forEach((r) => remove('expenses', r.id));
     const sharesMinor = mode === 'evenly' ? evenMinor(amtMinor, who) : customMinor;
     const method = !changedSplit ? e.method : mode === 'evenly' ? (who.length === emails.length ? 'evenly' : who.map((x) => nameOf(t.members, x)).join(' + ')) : 'custom';
     if (!e) notify(t.trip.id, { title: `${nameOf(t.members, me)} added ${title.trim()}`, body: `${money(amt, cur)} · you owe ${money(fromMinor(sharesMinor[me] || 0, cur), cur)}`, tag: 'money' });
     upsert('expenses', {
-      ...(e || {}), id, client_key: e?.client_key || id, trip_id: t.trip.id, title: title.trim(), payer_email: payer, method,
+      ...(e || {}), id, client_key: e?.client_key || id, trip_id: t.trip.id, title: title.trim(), payer_email: payer, method, receipt: own ? null : e?.receipt ?? null,
       ...expenseFields({ amountMinor: amtMinor, sharesMinor, currency: cur, kind: e?.kind || 'expense', adjustments: changedSplit ? [] : e?.adjustments || [], validation: changedSplit ? 'manual' : e?.validation || 'manual' }),
     });
     onClose();
@@ -145,10 +179,21 @@ function CostSheet({ t, me, e, onClose }) {
   return (
     <Sheet title={e ? 'Edit cost' : 'Add a cost'} onClose={onClose}>
       <label className="f">What<input className="in" value={title} onChange={(x) => setTitle(x.target.value)} placeholder="Taxi home, club tickets…" /></label>
-      <label className="f">Amount<input className="in" inputMode="decimal" value={amount} onChange={(x) => setAmount(x.target.value)} placeholder="0.00" /></label>
-      <label className="f">Paid by<select className="in" value={payer} onChange={(x) => setPayer(x.target.value)}>{t.members.map((m) => <option key={m.id} value={m.email.toLowerCase()}>{m.name || m.email}</option>)}</select></label>
-      <Seg value={mode} onChange={setMode} options={[['evenly', 'Split evenly'], ['custom', 'Custom amounts']]} label="Split method" />
-      {mode === 'evenly' ? (
+      {mode !== 'own' && <>
+        <label className="f">Amount<input className="in" inputMode="decimal" value={amount} onChange={(x) => setAmount(x.target.value)} placeholder="0.00" /></label>
+        <label className="f">Paid by<select className="in" value={payer} onChange={(x) => setPayer(x.target.value)}>{t.members.map((m) => <option key={m.id} value={m.email.toLowerCase()}>{m.name || m.email}</option>)}</select></label>
+      </>}
+      <Seg value={mode} onChange={setMode} options={[['evenly', 'Evenly'], ['custom', 'Custom'], ['own', 'Paid own']]} label="Split method" />
+      {mode === 'own' ? (
+        <div className="col">
+          <div className="s">Everyone paid for their own. Put in what each person spent: it counts in the trip total and their spend, and nobody owes anybody.</div>
+          {t.members.map((m) => {
+            const k = m.email.toLowerCase();
+            return <label key={m.id} className="row" style={{ font: '500 14px var(--sans)' }}><span className="grow">{k === me ? 'You' : m.name || m.email}</span><input className="in" style={{ width: 110 }} inputMode="decimal" value={ownAmts[k] || ''} onChange={(x) => setOwnAmts({ ...ownAmts, [k]: x.target.value })} placeholder="0.00" /></label>;
+          })}
+          <div className="s">Total {money(fromMinor(ownTotal, cur), cur)}</div>
+        </div>
+      ) : mode === 'evenly' ? (
         <div className="chips">
           {t.members.map((m) => {
             const k = m.email.toLowerCase();
@@ -166,13 +211,14 @@ function CostSheet({ t, me, e, onClose }) {
         </div>
       )}
       <button className="btn block" disabled={!ok} onClick={save}>{e ? 'Save' : 'Add cost'}</button>
-      {e && <button className="btn ghost block" onClick={() => { if (confirm('Delete this cost?')) { remove('expenses', e.id); onClose(); } }}>Delete</button>}
+      {e && <button className="btn ghost block" onClick={() => { if (confirm('Delete this cost?')) { (own || [e]).forEach((r) => remove('expenses', r.id)); onClose(); } }}>Delete</button>}
     </Sheet>
   );
 }
 
 // Photograph the bill → tap who had what → submit to trip expenses. Runs entirely on the phone.
 function ReceiptSplit({ t, me, onClose }) {
+  const [ownPaid, setOwnPaid] = useState(false);
   const fileRef = useRef();
   const emails = t.members.map((m) => m.email.toLowerCase());
   const tripCur = (t.trip.currency || 'EUR').toUpperCase();
@@ -261,6 +307,14 @@ function ReceiptSplit({ t, me, onClose }) {
     notify(t.trip.id, { title: `${nameOf(t.members, me)} split ${title || 'the bill'}`, body: `${money(shown(result.total), cur)} · see your share`, tag: 'money' });
     // Typed in by hand: nothing to check against. Otherwise the check as it stands at submit.
     const validation = !r?.validation ? 'manual' : check.status;
+    if (ownPaid) {
+      // Everyone paid for what they had: each person's share becomes their own row, no debts.
+      const { rows } = ownRows({ group: id, title: title || 'Dinner', currency: cur, amounts: result.shares, tripId: t.trip.id, newId: uid,
+        extra: { receipt_path: path }, firstExtra: { receipt: { lines, tip, adjustments, serviceIncluded: r?.serviceIncluded } } });
+      rows.forEach((x) => upsert('expenses', x));
+      onClose();
+      return;
+    }
     upsert('expenses', {
       id, client_key: id, trip_id: t.trip.id, title: title || 'Dinner', payer_email: payer,
       method: { item: 'per item, from receipt', even: 'evenly, from receipt', pct: 'by %, from receipt' }[mode],
@@ -285,7 +339,11 @@ function ReceiptSplit({ t, me, onClose }) {
       ) : (
         <>
           <input className="in" value={title} onChange={(e) => setTitle(e.target.value)} style={{ font: '400 26px var(--serif)', border: 0, background: 'transparent', padding: 0 }} aria-label="Name for this bill" placeholder="Name this bill" />
-          <label className="f">Paid by<select className="in" value={payer} onChange={(e) => setPayer(e.target.value)}>{t.members.map((m) => <option key={m.id} value={m.email.toLowerCase()}>{m.name || m.email}</option>)}</select></label>
+          {!ownPaid && <label className="f">Paid by<select className="in" value={payer} onChange={(e) => setPayer(e.target.value)}>{t.members.map((m) => <option key={m.id} value={m.email.toLowerCase()}>{m.name || m.email}</option>)}</select></label>}
+          <label className="row" style={{ justifyContent: 'space-between', font: '500 14px var(--sans)' }}>Everyone paid their own
+            <input type="checkbox" checked={ownPaid} onChange={(e) => setOwnPaid(e.target.checked)} style={{ width: 22, height: 22, accentColor: '#1E1A16' }} />
+          </label>
+          {ownPaid && <div className="s">Each person's share is what they paid. It counts in the total and their spend, and nobody owes anybody.</div>}
           {cur !== tripCur && <div className="s">This bill is in {cur}; the trip uses {tripCur}. It’s kept in {cur} and settled separately. <button className="link" onClick={() => setCur(tripCur)}>Use {tripCur} instead</button></div>}
           <Seg value={mode} onChange={setMode} options={[['item', 'Per item'], ['even', 'Evenly'], ['pct', 'By %']]} label="Split method" />
           <div className="card" style={{ padding: '2px 12px' }}>

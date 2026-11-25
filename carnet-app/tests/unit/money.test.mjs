@@ -88,3 +88,19 @@ test('itemised split with a printed service line and a tip adds up', () => {
     assert.equal(Object.values(r.shares).reduce((x, y) => x + y, 0), r.total);
   }
 });
+
+test('each paid their own: one row per person, all theirs, so nobody owes anybody', async () => {
+  const { ownRows, ownGroupOf } = await import('../../src/lib/minor.js');
+  const { balances } = await import('../../src/lib/money.js');
+  let n = 0;
+  const { rows, drop } = ownRows({ group: 'g1', title: 'Dinner', currency: 'EUR', amounts: { a: 2350, b: 1800, c: 0 }, tripId: 't', newId: () => 'id' + ++n });
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows.map((r) => [r.payer_email, r.amount_minor, JSON.stringify(r.shares_minor), ownGroupOf(r)]), [['a', 2350, '{"a":2350}', 'g1'], ['b', 1800, '{"b":1800}', 'g1']]);
+  assert.deepEqual(drop, []);
+  const net = balances(rows, []);
+  assert.ok(Object.values(net).every((v) => Math.abs(v) < 1e-9), 'nobody owes');
+  // Editing: b no longer had anything, c did; a keeps its row id.
+  const edit = ownRows({ group: 'g1', existing: rows, title: 'Dinner', currency: 'EUR', amounts: { a: 2000, c: 900 }, tripId: 't', newId: () => 'new' });
+  assert.deepEqual(edit.rows.map((r) => [r.id, r.payer_email, r.amount_minor]), [['id1', 'a', 2000], ['new', 'c', 900]]);
+  assert.deepEqual(edit.drop, ['id2']);
+});

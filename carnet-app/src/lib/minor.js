@@ -89,3 +89,24 @@ export function expenseFields({ amountMinor, sharesMinor, currency, kind = 'expe
     validation,
   };
 }
+
+// "Each paid their own": everyone paid for what they had, so nobody owes anyone — but it still
+// counts in the trip's total and in each person's spend. An expense has one payer, so it's saved
+// as one row per person (paid by them, all theirs), tied together by receipt.own_group.
+export const ownGroupOf = (e) => e?.receipt?.own_group || null;
+export function ownRows({ group, existing = [], title, currency, amounts, tripId, extra = {}, firstExtra = {}, newId = () => crypto.randomUUID() }) {
+  const byEmail = new Map(existing.map((e) => [e.payer_email, e]));
+  const keep = Object.entries(amounts).filter(([, m]) => m > 0);
+  const rows = keep.map(([email, m], i) => {
+    const old = byEmail.get(email);
+    const id = old?.id || newId();
+    return {
+      ...(old || {}), id, client_key: old?.client_key || id, trip_id: tripId, title, payer_email: email, method: 'paid their own',
+      ...expenseFields({ amountMinor: m, sharesMinor: { [email]: m }, currency, kind: 'expense', validation: 'manual' }),
+      ...extra, ...(i === 0 ? firstExtra : {}),
+      receipt: { ...((i === 0 ? firstExtra.receipt : null) || {}), own_group: group },
+    };
+  });
+  const drop = existing.filter((e) => !keep.some(([email]) => email === e.payer_email)).map((e) => e.id);
+  return { rows, drop };
+}
