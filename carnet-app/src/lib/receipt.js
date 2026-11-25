@@ -347,3 +347,15 @@ export function checkTotal(printedMinor, itemsMinor, adjustmentsMinor = 0, servi
   if (servicePct && Math.abs(printedMinor - Math.round(plain * (1 + servicePct / 100))) <= 2) return { status: 'reconciled', diff: 0 };
   return { status: 'difference', diff: printedMinor - plain };
 }
+
+// Two readers, one receipt: how believable a reading is, from the reading alone. One that adds up
+// to its own printed total wins; then one with a printed total close to its lines; then more lines.
+// (docs/benchmarks/R5-paddle.md: the better of Tesseract and Paddle this way, 60% of prices vs 52%.)
+export function believability(p) {
+  const items = p.lines.filter((l) => !l.service);
+  const sum = items.reduce((a, l) => a + l.price, 0);
+  let s = 0;
+  if (p.matchesTotal) s += 1000;
+  if (p.printedTotal != null) s += 100 - Math.min(90, (Math.abs(p.printedTotal - sum) / Math.max(1, p.printedTotal)) * 100);
+  return s + Math.min(items.length, 30);
+}

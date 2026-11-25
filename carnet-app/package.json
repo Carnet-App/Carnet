@@ -12,6 +12,7 @@
     "bench": "node --require ./tests/harness/core-pin.cjs tests/bench/run.mjs"
   },
   "dependencies": {
+    "@gutenye/ocr-models": "1.4.2",
     "@pushforge/builder": "^2.0.5",
     "@supabase/supabase-js": "^2.119.2",
     "@tesseract.js-data/eng": "^1.0.0",
@@ -19,6 +20,7 @@
     "idb-keyval": "^6.3.0",
     "jsqr": "^1.4.0",
     "maplibre-gl": "^6.19.0",
+    "onnxruntime-web": "^1.23.2",
     "pdfjs-dist": "^4.10.38",
     "qrcode": "^1.5.4",
     "react": "^19.3.1",

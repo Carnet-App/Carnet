@@ -352,7 +352,7 @@ export async function readReceipt(src, onProgress) {
     const fix = await rereadRows(src, best.box, best.angle, pick, parsed).catch(() => null);
     if (fix) ({ text: pick.text, corrections } = { text: fix.text, corrections: fix.corrections });
   }
-  return { text: pick.text, conf: pick.conf, angle: best.angle, canvas: pick.canvas, prep: pick.prep, recovered: pick.recovered || 0, corrections };
+  return { text: pick.text, conf: pick.conf, angle: best.angle, src, canvas: pick.canvas, prep: pick.prep, recovered: pick.recovered || 0, corrections };
 }
 
 // PDFs (e-tickets, booking confirmations, bills): each page drawn on the phone. The PDF's own text
@@ -983,4 +983,41 @@ export function mapsSheet(text = '') {
   }
   if (!name || name.length < 2 || !/\p{L}{2}/u.test(name)) return null;
   return { name, category };
+}
+
+// ── Second reader ─────────────────────────────────────────────────────
+// The whole photo, turned the way the first reader found upright, in colour: what Paddle reads.
+export function uprightCopy(src, angle, maxSide = 1600) {
+  const rot = angle % 180 !== 0;
+  const w0 = rot ? src.height : src.width, h0 = rot ? src.width : src.height;
+  const s = Math.min(1, maxSide / Math.max(w0, h0));
+  const c = globalThis.__mkCanvas ? globalThis.__mkCanvas() : document.createElement('canvas');
+  c.width = Math.round(w0 * s); c.height = Math.round(h0 * s);
+  const g = c.getContext('2d');
+  g.translate(c.width / 2, c.height / 2);
+  g.rotate((angle * Math.PI) / 180);
+  g.drawImage(src, (-src.width * s) / 2, (-src.height * s) / 2, src.width * s, src.height * s);
+  return c;
+}
+
+let paddle = null, seq = 0;
+const waiting = new Map();
+export async function readWithPaddle(canvas, onProgress) {
+  if (!paddle) {
+    paddle = new Worker(new URL('./paddleWorker.js', import.meta.url), { type: 'module' });
+    paddle.onmessage = ({ data }) => {
+      const w = waiting.get(data.id);
+      if (!w) return;
+      if (data.stage) return w.progress?.(data);
+      waiting.delete(data.id);
+      data.ok ? w.resolve(data.text) : w.reject(new Error(data.error));
+    };
+    paddle.onerror = (e) => { for (const w of waiting.values()) w.reject(new Error(e.message || 'second reader failed')); waiting.clear(); paddle = null; };
+  }
+  const bitmap = await createImageBitmap(canvas);
+  const id = ++seq;
+  return new Promise((resolve, reject) => {
+    waiting.set(id, { resolve, reject, progress: onProgress });
+    paddle.postMessage({ id, bitmap }, [bitmap]);
+  });
 }

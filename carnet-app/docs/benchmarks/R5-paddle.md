@@ -19,3 +19,15 @@ The one wrong "adds up" is the known Fujifilm case (same misread in a line and t
 
 Time (Node, 2-core server, native ONNX): median 2.2 s, max 5.1 s per receipt for Paddle v4. Safari/WASM on an iPhone still to measure.
 Paddle misses: sideways photos (no turning; the app already finds the way up, so give it the upright image), and very dim/dot-matrix print.
+
+#### As built (src/lib/paddle.js — own geometry, no OpenCV), same 55 receipts
+
+| Reader | Item amounts | Extra | Printed total right | "Adds up" (wrong) |
+| --- | --- | --- | --- | --- |
+| Paddle, app code (Node, onnxruntime-node) | 158/298 (53%) | 20 | 29/38 | 11 (0) |
+| **Tesseract + Paddle, `believability()` picks** | **180/298 (60%)** | 42 | **30/38** | 16 (1) |
+
+In the app Paddle only runs when Tesseract's reading doesn't add up, on the photo turned the way Tesseract found upright
+(sideways photos weren't turned in this Node run, so the app should do a little better on those).
+Time: 1.6 s median in Node; 4.6–6.0 s per receipt in Chromium WASM, one thread (a phone will be in this range or slower).
+Download: det 4.7 MB + rec 10.8 MB + runtime 11.9 MB (3.1 MB gzipped), the first time only, then cached offline.

@@ -9,3 +9,13 @@ for (const f of ['tesseract-core-simd-lstm.wasm.js', 'tesseract-core-lstm.wasm.j
 cpSync('node_modules/@tesseract.js-data/eng/4.0.0_best_int/eng.traineddata.gz', out + '/lang/eng.traineddata.gz');
 cpSync('node_modules/@tesseract.js-data/fra/4.0.0_best_int/fra.traineddata.gz', out + '/lang/fra.traineddata.gz');
 console.log('OCR assets copied');
+
+// Second receipt reader: PaddleOCR PP-OCRv4 detector + recogniser (Apache-2.0, ONNX exports).
+// Not installed with the app: fetched the first time a receipt needs it (vite.config.js).
+mkdirSync(out + '/paddle', { recursive: true });
+const pm = 'node_modules/@gutenye/ocr-models/assets/';
+cpSync(pm + 'ch_PP-OCRv4_det_infer.onnx', out + '/paddle/det.onnx');
+cpSync(pm + 'ch_PP-OCRv4_rec_infer.onnx', out + '/paddle/rec.onnx');
+cpSync(pm + 'ppocr_keys_v1.txt', out + '/paddle/keys.txt');
+cpSync('scripts/paddle-NOTICE.txt', out + '/paddle/NOTICE.txt');
+console.log('Second reader models copied');

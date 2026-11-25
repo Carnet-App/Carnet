@@ -4,8 +4,8 @@ import { upsert, remove, uid } from '../lib/store';
 import { simplify, pairwise, itemShares, ledgers } from '../lib/money';
 import { toMinor, fromMinor, evenMinor, allocate, sharesValid, expenseFields } from '../lib/minor';
 import { splitInputs, checkTotal } from '../lib/receipt';
-import { parseReceipt } from '../lib/receipt';
-import { loadImage, toCanvas, readReceipt, thumbBlob } from '../lib/capture';
+import { parseReceipt, believability } from '../lib/receipt';
+import { loadImage, toCanvas, readReceipt, thumbBlob, uprightCopy, readWithPaddle } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { money, nameOf } from '../lib/util';
 import { notify } from '../lib/push';
@@ -199,9 +199,22 @@ function ReceiptSplit({ t, me, onClose }) {
       const { img } = await loadImage(file);
       const photo = toCanvas(img, 2400);
       // Cut out the paper, turn it upright, even out the light, read it row by row.
-      const res = await readReceipt(photo, setBusy);
-      const parsed = parseReceipt(res.text);
-      const log = { kind: 'receipt', totalMs: performance.now() - t0, size: [photo.width, photo.height], angle: res.angle, ocrConfidence: Math.round(res.conf), text: res.text, parsed };
+      let res = await readReceipt(photo, setBusy);
+      let parsed = parseReceipt(res.text);
+      // Doesn't add up yet? A second reader (Paddle) reads the upright photo too, and the more
+      // believable of the two readings is kept. Skipped if it can't load (first time with no signal).
+      let second = null;
+      if (!parsed.matchesTotal) {
+        try {
+          setBusy(typeof caches !== 'undefined' && !(await caches.match('/ocr/paddle/rec.onnx')) ? 'Getting the second reader ready (first time only, about 25 MB)…' : 'Second reader taking a look…');
+          const t1 = performance.now();
+          const text = await readWithPaddle(uprightCopy(res.src, res.angle), (m) => m.stage === 'progress' ? setBusy(`Second reader taking a look… ${Math.round((m.i / m.n) * 100)}%`) : setBusy('Second reader taking a look…'));
+          const p2 = parseReceipt(text);
+          second = { ms: Math.round(performance.now() - t1), text, parsed: p2, used: believability(p2) > believability(parsed) };
+          if (second.used) { res = { ...res, text, corrections: [] }; parsed = p2; }
+        } catch (e) { second = { error: e.message }; }
+      }
+      const log = { kind: 'receipt', totalMs: performance.now() - t0, size: [photo.width, photo.height], angle: res.angle, ocrConfidence: Math.round(res.conf), reader: second?.used ? 'paddle' : 'tesseract', text: res.text, parsed, second };
       saveInspection(log);
       setInspect(log);
       setThumb(await thumbBlob(photo, 900));
