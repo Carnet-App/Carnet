@@ -49,6 +49,15 @@ export function guessCategory(tag = '', text = '') {
 
 // ── Dates & times ─────────────────────────────────────────────────────
 export const todayISO = () => new Date().toLocaleDateString('en-CA');
+// A trip's "now": the night runs on until 05:00, so 00:30 after Friday's show is still Friday
+// night, at minute 1470 (24:30) of Friday. Plan, Today and the day view all read the clock this way.
+export const NIGHT_ENDS = 5 * 60;
+export function tripNow(d = new Date()) {
+  const min = d.getHours() * 60 + d.getMinutes();
+  if (min >= NIGHT_ENDS) return { day: d.toLocaleDateString('en-CA'), min };
+  const y = new Date(d); y.setDate(y.getDate() - 1);
+  return { day: y.toLocaleDateString('en-CA'), min: min + 24 * 60 };
+}
 export function daysBetween(start, end) {
   if (!start) return [];
   const out = [];

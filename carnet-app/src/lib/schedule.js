@@ -1,4 +1,15 @@
-import { toMin, walkMin, distM } from './util';
+import { toMin, walkMin, distM } from './util.js';
+
+const DAY = 24 * 60;
+const prevDay = (iso) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() - 1); return d.toLocaleDateString('en-CA'); };
+// An item's span in minutes from its own day's midnight. An end earlier than the start ("23:45 until
+// 01:00") is the next morning: 1425 to 1500. With no end, 90 minutes is assumed.
+export function span(it) {
+  const start = toMin(it.start_time);
+  let end = it.end_time ? toMin(it.end_time) : start + 90;
+  if (end <= start) end += DAY;
+  return { start, end, overnight: end > DAY };
+}
 
 // Builds a day: items in order, travel between them, and the free gaps worth filling.
 export function buildDay({ items, day, home, now, places, minGap = 45 }) {
@@ -10,9 +21,16 @@ export function buildDay({ items, day, home, now, places, minGap = 45 }) {
   const isToday = now && now.day === day;
   let cursor = Math.max(9 * 60, isToday ? now.min : 0);
   let prevLoc = home;
+  // Last night's plans that run past midnight into this morning come first, and the morning's
+  // free time starts after them.
+  const yday = prevDay(day);
+  for (const it of items.filter((i) => i.day === yday && i.start_time).map((i) => ({ i, s: span(i) })).filter(({ s }) => s.end > DAY)
+    .sort((a, b) => a.s.start - b.s.start)) {
+    rows.push({ kind: 'item', item: it.i, start: it.s.start - DAY, end: it.s.end - DAY, fromYesterday: true });
+    cursor = Math.max(cursor, it.s.end - DAY);
+  }
   for (const it of list) {
-    const start = toMin(it.start_time);
-    const end = it.end_time ? toMin(it.end_time) : start + 90;
+    const { start, end } = span(it);
     const loc = it.lat != null ? { lat: it.lat, lng: it.lng } : null;
     const travel = walkMin(prevLoc, loc);
     const freeEnd = start - (travel || 0);
@@ -22,7 +40,8 @@ export function buildDay({ items, day, home, now, places, minGap = 45 }) {
     cursor = Math.max(cursor, end);
     if (loc) prevLoc = loc;
   }
-  if (24 * 60 - cursor >= 120) rows.push(gapRow(cursor, 24 * 60, prevLoc, places, items, true));
+  // Free time to the end of the evening, unless the night is already taken up past midnight.
+  if (DAY - cursor >= 120) rows.push(gapRow(cursor, DAY, prevLoc, places, items, true));
   return { rows, loose };
 }
 

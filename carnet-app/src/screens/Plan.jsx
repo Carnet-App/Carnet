@@ -3,11 +3,11 @@ import DayView from './DayView';
 import Proposals, { ProposalBanner } from './Proposals';
 import ItemEditor from './ItemEditor';
 import { CatTag, StatusPill } from '../ui';
-import { daysBetween, dayLabel, todayISO } from '../lib/util';
+import { daysBetween, dayLabel, tripNow } from '../lib/util';
 
 export default function Plan({ t, me, open }) {
   const days = daysBetween(t.trip.start_date, t.trip.end_date);
-  const [day, setDay] = useState(days.includes(todayISO()) ? todayISO() : days[0]);
+  const [day, setDay] = useState(days.includes(tripNow().day) ? tripNow().day : days[0]);
   const [add, setAdd] = useState(null);
   const [review, setReview] = useState(false);
   const unscheduled = t.items.filter((i) => !i.day);

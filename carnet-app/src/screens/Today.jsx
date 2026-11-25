@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Icon, Avatar } from '../ui';
 import DayView from './DayView';
 import Proposals, { ProposalBanner } from './Proposals';
-import { dayLabel, daysBetween, todayISO, useLocation, stayFor, walkMin, toMin, hm, api, distM } from '../lib/util';
+import { dayLabel, daysBetween, tripNow, NIGHT_ENDS, useLocation, stayFor, walkMin, toMin, hm, api, distM } from '../lib/util';
 
 function useTransit(from, to, enabled) {
   const [r, setR] = useState(null);
@@ -19,7 +19,9 @@ export default function Today({ t, me, open }) {
   const [review, setReview] = useState(false);
   const { trip, members, stays, items } = t;
   const days = daysBetween(trip.start_date, trip.end_date);
-  const today = todayISO();
+  // Trip time: until 05:00 it's still last night (see tripNow).
+  const tnow = tripNow();
+  const today = tnow.day;
   const day = days.includes(today) ? today : today < days[0] ? days[0] : days[days.length - 1];
   const idx = days.indexOf(day) + 1;
   const pos = useLocation();
@@ -29,15 +31,18 @@ export default function Today({ t, me, open }) {
   const nearHome = pos && home && distM(pos, home) < 120;
   const homeTransit = useTransit(pos, home, isParis && homeWalk > 15);
 
-  const nowMin = new Date().getHours() * 60 + new Date().getMinutes();
+  const nowMin = tnow.min;
+  // Next: tonight's plans, including ones after midnight entered on the next day ("01:00 club").
+  const tomorrow = (() => { const d = new Date(today + 'T12:00:00'); d.setDate(d.getDate() + 1); return d.toLocaleDateString('en-CA'); })();
+  const at = (i) => toMin(i.start_time) + (i.day === tomorrow ? 24 * 60 : 0);
   const next = items
-    .filter((i) => i.day === today && i.start_time && toMin(i.start_time) > nowMin && i.lat != null && (i.visibility !== 'busy' || i.mine_private))
-    .sort((a, b) => a.start_time.localeCompare(b.start_time))[0];
+    .filter((i) => (i.day === today || (i.day === tomorrow && toMin(i.start_time) < NIGHT_ENDS)) && i.start_time && at(i) > nowMin && i.lat != null && (i.visibility !== 'busy' || i.mine_private))
+    .sort((a, b) => at(a) - at(b))[0];
   const nextWalk = next && walkMin(pos || home, next);
   const nextTransit = useTransit(pos || home, next, isParis && nextWalk > 15);
   const nextMins = nextTransit?.minutes && nextTransit.minutes < nextWalk ? nextTransit.minutes : nextWalk;
-  const leaveBy = next && nextMins != null ? toMin(next.start_time) - nextMins - 3 : null;
-  const lb = leaveBy != null ? `${String(Math.floor(leaveBy / 60)).padStart(2, '0')}:${String(leaveBy % 60).padStart(2, '0')}` : null;
+  const leaveBy = next && nextMins != null ? at(next) - nextMins - 3 : null;
+  const lb = leaveBy != null ? `${String(Math.floor(leaveBy / 60) % 24).padStart(2, '0')}:${String(leaveBy % 60).padStart(2, '0')}` : null;
 
   return (
     <div className="page">

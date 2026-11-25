@@ -104,7 +104,7 @@ export default function ItemEditor({ t, me, item, preset = {}, onClose }) {
           </select>
         </label>
         <label className="f" style={{ width: 96 }}>From<input className="in" type="time" value={f.start_time} onChange={(e) => set('start_time', e.target.value)} /></label>
-        <label className="f" style={{ width: 96 }}>To<input className="in" type="time" value={f.end_time} onChange={(e) => set('end_time', e.target.value)} /></label>
+        <label className="f" style={{ width: 96 }}>To{f.start_time && f.end_time && f.end_time <= f.start_time ? <span className="s"> · next day</span> : ''}<input className="in" type="time" value={f.end_time} onChange={(e) => set('end_time', e.target.value)} /></label>
       </div>
       <label className="f">Status</label>
       <Seg value={f.status} onChange={(v) => set('status', v)} options={[['idea', 'Idea'], ['planned', 'Planned'], ['booked', 'Booked']]} label="Status" />

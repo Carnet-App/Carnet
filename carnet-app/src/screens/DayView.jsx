@@ -1,14 +1,14 @@
 import { useState } from 'react';
 import { Icon, CatTag } from '../ui';
 import { buildDay } from '../lib/schedule';
-import { cat, hm, fromMin, dur, stayFor, todayISO, nameOf } from '../lib/util';
+import { cat, hm, fromMin, dur, stayFor, tripNow, nameOf, dayLabel } from '../lib/util';
+import { span } from '../lib/schedule';
 import ItemEditor from './ItemEditor';
 
 export default function DayView({ t, me, day, pos }) {
   const [edit, setEdit] = useState(null);
   const home = stayFor(t.stays, day);
-  const nowD = new Date();
-  const now = { day: todayISO(), min: nowD.getHours() * 60 + nowD.getMinutes() };
+  const now = tripNow();
   const { rows, loose } = buildDay({ items: t.items, day, home: (day === now.day && pos) || home, now, places: t.places });
 
   return (
@@ -45,8 +45,8 @@ export default function DayView({ t, me, day, pos }) {
         const c = cat(it.category);
         const st = busyOther ? { background: '#EDE9E2', borderColor: '#DCD5CA' } : it.visibility !== 'shared' ? { background: '#EDE9E2', borderColor: '#DCD5CA' } : { background: c.bg, borderColor: c.bg };
         return (
-          <div key={it.id} className="tl">
-            <div className="tm">{hm(it.start_time)}</div>
+          <div key={(r.fromYesterday ? 'y' : '') + it.id} className="tl">
+            <div className="tm">{r.fromYesterday ? '00:00' : hm(it.start_time)}</div>
             <button className="it" style={st} onClick={() => !busyOther && setEdit({ item: it })} disabled={busyOther}>
               {busyOther ? (
                 <><div className="k mute">Busy</div><div className="n">{nameOf(t.members, it.created_by_email)} has something on</div></>
@@ -54,7 +54,7 @@ export default function DayView({ t, me, day, pos }) {
                 <>
                   <CatTag c={it.category} extra={[it.status === 'booked' && 'booked', it.status === 'idea' && 'idea', it.visibility === 'busy' && 'crew sees “busy”', it.visibility === 'hidden' && 'only you'].filter(Boolean).join(' · ')} />
                   <div className="n" style={{ color: 'var(--ink)' }}>{it.title}</div>
-                  {(it.end_time || it.address) && <div className="s">{it.end_time ? `until ${hm(it.end_time)}` : ''}{it.end_time && it.address ? ' · ' : ''}{it.address || ''}</div>}
+                  {(it.end_time || it.address || r.fromYesterday) && <div className="s">{r.fromYesterday ? `from ${dayLabel(it.day, { weekday: 'short' })} ${hm(it.start_time)} · ` : ''}{it.end_time ? `until ${hm(it.end_time)}${!r.fromYesterday && span(it).overnight ? ' (next day)' : ''}` : ''}{it.end_time && it.address ? ' · ' : ''}{it.address || ''}</div>}
                 </>
               )}
             </button>
