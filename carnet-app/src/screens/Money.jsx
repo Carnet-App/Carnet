@@ -80,6 +80,7 @@ export default function Money({ t, me }) {
         </div>
       </div>
       {settlements.length > 0 && <div className="s">{settlements.length} payment{settlements.length > 1 ? 's' : ''} marked as paid.</div>}
+      <div className="s" style={{ textAlign: 'center', opacity: 0.5, fontSize: 12, marginTop: 24 }}>Version {__BUILD__} UTC</div>
 
       {add && <CostSheet t={t} me={me} e={add.id ? add : null} onClose={() => setAdd(null)} />}
       {scan && <ReceiptSplit t={t} me={me} onClose={() => setScan(false)} />}
