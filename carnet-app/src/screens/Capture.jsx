@@ -299,7 +299,6 @@ function VenueReview({ t, r, setR, onDone }) {
     <>
       {picture && <img src={picture} alt="" style={{ width: '100%', aspectRatio: '4 / 3', objectFit: 'cover', borderRadius: 18, display: 'block', background: '#E8E1D6' }} />}
       <h1 className="h1" style={{ fontSize: 28 }}>{r.venues.length === 1 ? 'Found one place' : `${r.venues.length} possible places`}</h1>
-      <div className="s">Ticked ones matched clearly. Anything unsure asks you first.</div>
       <div className="card" style={{ padding: '4px 16px' }}>
         <div className="list">
           {r.venues.map((v, i) => (
