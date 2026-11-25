@@ -340,6 +340,33 @@ export async function readOverlay(canvas, box) {
 //   "A TRADITIONAL FRENCH BISTRO NEAR PLACE DE LA BASTILLE…"
 // The name is the candidate; the quote is the note; places it mentions narrow the search.
 const QUOTE_OPEN = /^[“"«<‘']/;
+// A line made only of everyday words isn't a name ("right now", "must visit", "so good").
+const EVERYDAY = new Set(['right', 'now', 'here', 'there', 'new', 'best', 'top', 'just', 'really', 'very', 'so', 'must', 'visit', 'today', 'tonight', 'this', 'that', 'week', 'weekend', 'insane', 'crazy', 'guide', 'love', 'why', 'how', 'what', 'more', 'good', 'great', 'favourite', 'favorite', 'spot', 'spots', 'place', 'places', 'only', 'ever', 'still', 'again', 'omg', 'wow', 'yes', 'no', 'my', 'our', 'go', 'come', 'see', 'try']);
+const everyday = (t) => { const w = t.toLowerCase().match(/\p{L}+/gu) || []; return w.length > 0 && w.every((x) => EVERYDAY.has(x) || STOP.test(x)); };
+// "78 Rue Vieille du Temple Fashion crowd crossroads" → "78 Rue Vieille du Temple": a street
+// address written on the picture, cut where the sentence after it starts.
+const PIC_ADDR = /\b(\d{1,4}\s*(?:bis|ter)?,?\s+(?:rue|avenue|av\.?|bd|boulevard|place|quai|passage|impasse|all[ée]e|cours|chemin|square|villa|faubourg|carrer|calle|via|straße|strasse|street|road|lane))\s+(.*)$/iu;
+const LINK = /^(du|de|des|la|le|l['’]\S*|d['’]\S*|del|di|der|the|of)$/i;
+export function pictureAddress(lines) {
+  for (const l of lines) {
+    const m = (l.text || l).match(PIC_ADDR);
+    if (!m) continue;
+    // The street name: capitalised words and the small words between them; stop at the first
+    // other word, and drop a capitalised word that starts the next sentence ("… Temple Fashion crowd").
+    const words = m[2].split(/\s+/);
+    const name = [];
+    for (let k = 0; k < words.length; k++) {
+      const w = words[k];
+      if (/^[\p{Lu}\d]/u.test(w) && !(name.length && words[k + 1] && /^[a-z]/.test(words[k + 1]) && !LINK.test(words[k + 1]))) name.push(w);
+      else if (LINK.test(w) && words[k + 1] && /^[\p{Lu}\d]/u.test(words[k + 1])) name.push(w);
+      else break;
+    }
+    if (name.length) return `${m[1]} ${name.join(' ')}`.replace(/[.,;:]+$/, '');
+    // "12 rue de charonne" written in lower case: keep up to three words.
+    return `${m[1]} ${words.slice(0, 3).join(' ')}`.replace(/[.,;:]+$/, '');
+  }
+  return null;
+}
 const STOP = /\b(the|a|an|of|in|for|and|near|to|on|so|with|from|that|is|are|you|your|this|it|at|by|where|when|till|until|under)\b/i;
 const sentence = (t) => t.replace(/[“”"«»_]/g, '').replace(/\s+/g, ' ').trim().toLowerCase().replace(/(^|[.!?]\s+)(\p{L})/gu, (m, a, b) => a + b.toUpperCase());
 const squash = (t) => t.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]/g, '');
@@ -403,13 +430,17 @@ export function overlayCandidates(lines, { handle } = {}) {
   }
   // A lone short line, biggest first ("VIRAGE"), when there's no quote to anchor on.
   if (!out.length) {
-    const lone = L.filter((l, i) => !used.has(i) && l.text.split(/\s+/).length <= 4 && !STOP.test(l.text) && !junk(l.text) && !/[.!?]$/.test(l.text) && !/[€£$]|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise/i.test(l.text) && /\p{L}{3,}/u.test(l.text))
+    const lone = L.filter((l, i) => !used.has(i) && l.text.split(/\s+/).length <= 4 && !STOP.test(l.text) && !everyday(l.text) && !junk(l.text) && !/[.!?]$/.test(l.text) && !/[€£$]|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise/i.test(l.text) && /\p{L}{3,}/u.test(l.text))
       .sort((a, b) => b.h - a.h);
     lone.slice(0, 2).filter((l, k) => !k || l.h >= lone[0].h * 0.8).forEach((l, k) => out.push({ name: l.text, why: k ? 'on the photo' : 'on the photo · biggest text', weight: k ? 3 : 5 }));
   }
   // Facts worth keeping as the note: price, hours, music.
   const facts = L.filter((l, i) => !used.has(i) && /[€£$]\s?\d|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise|till|until|techno|house|jazz|disco|entry|free/i.test(l.text)).map((l) => l.text);
   if (facts.length) for (const o of out) o.note = [o.note, ...facts].filter(Boolean).join(' · ');
+  // One named place on the picture and an address written on it: they go together.
+  const named = out.filter((o) => o.name);
+  const addr = named.length === 1 ? pictureAddress(L) : null;
+  if (addr) named[0].address = addr;
   return out;
 }
 
@@ -604,6 +635,8 @@ export function venueCandidates(text, lines = null, height = 1, opts = {}) {
     const pin = l.match(/(?:📍|📌|location:|address:|adresse\s*:)\s*(.+)/i);
     if (pin) add(pin[1].split(/[,–—-]/)[0], 'pin / location', 5);
     for (const m of l.matchAll(/@([a-z0-9._]{3,30})/gi)) {
+      // "S95 founder @dualipa", "📸 @someone", "with @friend": a person, not a place.
+      if (/(?:founder|co-?founder|chef|owner|by|with|ft\.?|feat\.?|photo(?:s|graphy)?|📸|dj|host(?:ed)? by|thanks|cc)\s*:?\s*$/i.test(l.slice(0, m.index)) && !/thanks to\s*$/i.test(l.slice(0, m.index))) continue;
       const before = out.length;
       add(handleName(m[1]), '@mention', 2);
       if (out.length > before) out[out.length - 1].squash = squashName(handleName(m[1]));

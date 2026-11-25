@@ -16,6 +16,12 @@ const LOOKUPS = [
   { name: 'cafe la perle', alts: ['LAPERLE'], results: [R('Café La Perle', 'cafe'), R('Rue Vieille du Temple', 'living_street')], want: 'Café La Perle' },
   { name: 'le carmen', results: [R('Paris', 'administrative'), R('Paris', 'city'), R('Conservatoire national supérieur de musique et de danse de Paris', 'college'), R('Cathedral of Notre Dame', 'place_of_worship'), R('Université Paris I Panthéon-Sorbonne', 'university')], want: null },
   { name: 'lamenagerieparis', results: [R('BGL BNP Paribas', 'bank')], want: null },
+  // Second import, 25 Nov 11:30
+  { name: 'Bish rot Des Tournelles', alts: ['Bistrot Des Tournelles'], results: [R('Saint Parascheva Church', 'place_of_worship'), R('Allai Bishaam road', 'unclassified'), R('Bistrot des Tournelles', 'restaurant'), R("Bistrot de l'Oulette", 'restaurant')], want: 'Bistrot des Tournelles' },
+  { name: 'cafe la perle', alts: ['LAPERLE'], results: [R('La perle noire', 'pub'), R('L’apérette', 'bar'), R('La Lacelle Bourg', 'bus_stop')], want: null },
+  { name: 'cafe charlot', results: [R('Café Charlot', 'restaurant')], want: 'Café Charlot' },
+  { name: 'le carmen', results: [R('Le Carmen', 'bar'), R('Calle Arco de Paris', 'residential'), R('Los Parisones', 'locality')], want: 'Le Carmen' },
+  { name: 'Double Dr ragon', results: [R('Double Dragon', 'restaurant'), R('Double Tree Drive', 'residential')], want: 'Double Dragon' },
   { name: 'Septime', results: [R('Septime La Cave', 'wine_bar')], want: null, offer: 'Septime La Cave' },
 ];
 

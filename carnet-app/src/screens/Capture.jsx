@@ -130,7 +130,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       const area = areaHint(hintText || pg.text || '');
       const kind = typeHint([pg.post ? pg.post.caption : pg.text, pg.overlay].filter(Boolean).join('\n'));
       const fromPic = new Map((pg.pic || []).filter((c) => c.name).map((c) => [c.name.toLowerCase(), c]));
-      for (const c of cands.slice(0, 6)) {
+      for (const c of cands.slice(0, 8)) {
         const p = fromPic.get(c.name.toLowerCase());
         found.push({ c: { ...c, note: [p?.note, facts].filter(Boolean).join(' · ') || null, hint: p?.hint || placeHint(hintText) || null }, photo: pg.photo, area, kind });
       }
@@ -160,7 +160,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     const venues = [];
     // Strongest first, so a name with its address on screenshot 13 isn't cut off by weak
     // @mentions from the earlier ones (the cap only drops the weakest).
-    const ranked = merged.map((f, i) => ({ f, i })).sort((a, b) => (b.f.nameless ? 4 : b.f.c.weight) - (a.f.nameless ? 4 : a.f.c.weight) || a.i - b.i).slice(0, 14).sort((a, b) => a.i - b.i).map((x) => x.f);
+    const ranked = merged.map((f, i) => ({ f, i })).sort((a, b) => (b.f.nameless ? 4 : b.f.c.weight) - (a.f.nameless ? 4 : a.f.c.weight) || a.i - b.i).slice(0, 24).sort((a, b) => a.i - b.i).map((x) => x.f);
     const search = (q, at, type) => findVenue(q.replace(/\s+/g, ' ').trim(), at, type, { name: q, city }).catch(() => []);
     for (const f of ranked) {
       const { c, photo, area, kind } = f;

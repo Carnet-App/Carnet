@@ -65,3 +65,19 @@ test('defect 14: a lowercase name keeps its first word', () => {
 test('defect 17: a QR code alone does not make a ticket', () => {
   assert.equal(looksLikeTicket('Menu of the day\nScan for our wine list', { data: 'https://example.com/wine' }), false);
 });
+
+test('an address written on the picture goes with the one name on it', async () => {
+  const { overlayCandidates, pictureAddress } = await import('../../src/lib/capture.js');
+  const mk = (a) => a.map((t, i) => ({ text: t, y: i * 60, h: 50, conf: 90 }));
+  const c = overlayCandidates(mk(['LAPERLE', 'fashion crowd bistro €€', '78 Rue Vieille du Temple Fashion crowd crossroads']));
+  assert.equal(c[0].address, '78 Rue Vieille du Temple');
+  assert.equal(pictureAddress(['37 avenue Montaigne']), '37 avenue Montaigne');
+});
+
+test('everyday phrases are not names, and people tagged in captions are not places', async () => {
+  const { overlayCandidates, venueCandidates } = await import('../../src/lib/capture.js');
+  const mk = (a) => a.map((t, i) => ({ text: t, y: i * 60, h: 50 + i, conf: 90 }));
+  assert.deepEqual(overlayCandidates(mk(['The chicest new cafe in Paris', 'right now'])), []);
+  const names = venueCandidates('S95 founder @dualipa serves up her picks\nthanks to @lamenagerieparis').map((x) => x.name);
+  assert.deepEqual(names, ['la menagerie']);
+});
