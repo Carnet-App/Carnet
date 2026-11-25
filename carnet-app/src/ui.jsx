@@ -33,14 +33,14 @@ export function Icon({ n, size = 22, color = 'currentColor', w = 1.7 }) {
   );
 }
 
-export function Sheet({ onClose, children, full, title }) {
+export function Sheet({ onClose, children, full, title, className = '' }) {
   useEffect(() => {
     document.body.style.overflow = 'hidden';
     return () => (document.body.style.overflow = '');
   }, []);
   return (
     <div className="sheet-back" onClick={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className={'sheet' + (full ? ' full' : '')} role="dialog" aria-label={title}>
+      <div className={'sheet' + (full ? ' full' : '') + (className ? ' ' + className : '')} role="dialog" aria-label={title}>
         {!full && <div className="grab" />}
         {title && (
           <div className="between">

@@ -1,9 +1,9 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
-import { readImage, readVideo, looksLikeTicket, parseTicket, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, zonedCandidates, typeHint } from '../lib/capture';
+import { readImage, readVideo, looksLikeTicket, parseTicket, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
 import { storeFile } from '../lib/files';
-import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel } from '../lib/util';
+import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS } from '../lib/util';
 import ItemEditor from './ItemEditor';
 import { AddPlace } from './Places';
 import { useStore } from '../lib/store';
@@ -33,13 +33,11 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       // A post screenshot: read the caption first, the words on the photo second,
       // and keep the photo itself (not the whole screen) as the place's picture.
       const post = !isVideo && r.canvas ? postLayout(r.lines, r.height) : null;
-      let overlay = '', photo = null;
-      if (post) {
-        setProgress('Reading the caption and the photo…');
-        overlay = await readOverlay(r.canvas, post.media).catch(() => '');
-        photo = await thumbBlob(r.canvas, 900, post.media);
-      }
-      await understand({ text: r.text, lines: r.lines, height: r.height, qr: r.qr, thumb, photo, post, overlay, source: /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
+      const photo = post ? await thumbBlob(r.canvas, 900, post.media) : null;
+      // Text inside pictures is read on demand: always for a post's photo (it often says
+      // "hidden bar in Le Marais"), otherwise only if the screen's own text wasn't enough.
+      const pictureText = !isVideo && r.canvas ? () => readOverlay(r.canvas, post ? post.media : { y0: 0, y1: r.canvas.height }).catch(() => '') : null;
+      await understand({ text: r.text, lines: r.lines, height: r.height, qr: r.qr, thumb, photo, post, pictureText, source: /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
     } catch (e) {
       setProgress('Couldn’t read that one: ' + e.message);
       setStage('pick');
@@ -88,18 +86,27 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     await understand({ text, source, link });
   }
 
-  async function understand({ text, lines, height, qr, thumb, photo, post, overlay = '', source, link: srcLink }) {
+  async function understand({ text, lines, height, qr, thumb, photo, post, pictureText, source, link: srcLink }) {
     if (looksLikeTicket(text, qr)) {
       const tk = parseTicket(text);
       setResult({ kind: 'ticket', ...tk, qr, thumb, text });
       setStage('ticket');
       return;
     }
-    const cands = post ? zonedCandidates(post.caption, overlay, text) : venueCandidates(text, lines, height);
+    let overlay = '';
+    let cands;
+    if (lines?.length) {
+      const first = firstLine({ post, lines, height, text });
+      if (pictureText && (post || !isStrong(first))) {
+        setProgress(post ? 'Reading the caption and the photo…' : 'Looking at text inside the pictures…');
+        overlay = await pictureText();
+      }
+      cands = tieredCandidates(first, overlay, text);
+    } else cands = venueCandidates(text); // links, captions fetched from the web
     const handle = text.match(/^\s*([a-z0-9._]{3,30})\s*$/im)?.[1];
     const hints = [post?.caption, overlay, text].filter(Boolean).join('\n');
     const area = areaHint(hints);
-    const kind = typeHint([post?.caption, overlay].filter(Boolean).join('\n'));
+    const kind = typeHint([post ? post.caption : text, overlay].filter(Boolean).join('\n'));
     setProgress(navigator.onLine ? 'Checking those names on the map…' : 'Offline — these will be checked when you have signal.');
     const venues = [];
     for (const c of cands.slice(0, 6)) {
@@ -128,6 +135,8 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       if (!scored.length && c.weight < 4) continue; // weak guess with no match: don't bother asking
       venues.push({ cand: c, options: scored.slice(0, 3), pick: sure ? 0 : null, keep: sure, sure });
     }
+    // What kind of place: the map's own tag beats words on screen; you can change it before saving.
+    for (const v of venues) v.cat = catFor(v, kind);
     // Not in a trip and no city yet? Take it from what matched.
     let guessCity = city;
     if (!guessCity) {
@@ -143,7 +152,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
   if (manual) return <AddPlace city={city || 'Paris'} near={null} onClose={onClose} />;
 
   return (
-    <Sheet full onClose={onClose}>
+    <Sheet full className="roomy" onClose={onClose}>
       <div className="between">
         <button className="link" style={{ textDecoration: 'none' }} onClick={onClose}>Close</button>
         <span className="k amber">Capture</span>
@@ -166,7 +175,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
           </label>
           <button className="btn ghost block" onClick={() => setManual(true)}>{t ? 'Type it in — a plan, a booking or something private' : `Type a place name${city ? ' in ' + city : ''}`}</button>
           {progress && <div className="s">{progress}</div>}
-          <div className="s">Tip: for a reel that saves the reveal for the end, screen-record it and send the recording — Carnet reads names off every frame.</div>
+          <div className="s hint">Tip: for a reel that saves the reveal for the end, screen-record it and send the recording — Carnet reads names off every frame.</div>
         </>
       )}
 
@@ -218,6 +227,12 @@ function TicketForm({ t: given, me, r, onDone, onNotTicket }) {
   );
 }
 
+function catFor(v, kind) {
+  const m = v.pick != null ? v.options[v.pick] : null;
+  const fromMap = m?.osm_value ? guessCategory(m.osm_value) : 'explore';
+  return fromMap !== 'explore' ? fromMap : guessCategory('', `${v.cand.name} ${v.cand.type || ''} ${kind || ''}`);
+}
+
 // "None of these": type the real name and search again.
 function FixName({ v, city, near, onFound }) {
   const [open, setOpen] = useState(false);
@@ -230,7 +245,8 @@ function FixName({ v, city, near, onFound }) {
     const res = navigator.onLine ? await findVenue(`${name} ${city || ''}`.trim(), near).catch(() => []) : [];
     const scored = res.map((m) => ({ ...m, sim: similarity(name, m.name) })).sort((a, b) => b.sim - a.sim).slice(0, 3);
     const sure = scored[0]?.sim >= 0.8;
-    onFound({ cand: { ...v.cand, name, why: 'typed by you' }, options: scored, pick: sure ? 0 : null, keep: true, sure: false });
+    const next = { cand: { ...v.cand, name, why: 'typed by you' }, options: scored, pick: sure ? 0 : null, keep: true, sure: false };
+    onFound({ ...next, cat: v.catSet ? v.cat : catFor(next, null) });
     setBusy(false);
     setOpen(false);
   }
@@ -259,14 +275,14 @@ function VenueReview({ t, r, setR, onDone }) {
       const m = v.pick != null ? v.options[v.pick] : null;
       const id = uid();
       upsert('places', {
-        id, city, name: m?.name || v.cand.name, category: guessCategory(m?.osm_value, (m?.name || '') + ' ' + v.cand.name),
+        id, city, name: m?.name || v.cand.name, category: v.cat || guessCategory(m?.osm_value, (m?.name || '') + ' ' + v.cand.name),
         address: m?.address || v.cand.address || null, lat: m?.lat ?? null, lng: m?.lng ?? null,
         source: r.source, source_detail: r.handle ? '@' + r.handle : null, link: r.link || null,
         photo_path: photo, photo_url: m?.google_id ? `/api/gphoto?id=${encodeURIComponent(m.google_id)}` : null,
         collection: collection || null, needs_check: !m,
       });
       if (t && alsoTrip && city.toLowerCase() === t.trip.city?.toLowerCase())
-        upsert('items', { id: uid(), trip_id: t.trip.id, place_id: id, title: m?.name || v.cand.name, category: guessCategory(m?.osm_value, v.cand.name), status: 'idea', visibility: 'shared', lat: m?.lat ?? null, lng: m?.lng ?? null, address: m?.address || null });
+        upsert('items', { id: uid(), trip_id: t.trip.id, place_id: id, title: m?.name || v.cand.name, category: v.cat || guessCategory(m?.osm_value, v.cand.name), status: 'idea', visibility: 'shared', lat: m?.lat ?? null, lng: m?.lng ?? null, address: m?.address || null });
     }
     onDone();
   }
@@ -274,14 +290,20 @@ function VenueReview({ t, r, setR, onDone }) {
   if (!r.venues.length)
     return <div className="empty">Couldn’t spot any place names in that.<br />Try a screenshot that shows the location tag or caption, or type it in.</div>;
 
+  // The picture you'll see on the place: the photo from the post (or the screenshot),
+  // else the venue's own photo from Google when that's switched on.
+  const picked = r.venues.find((v) => v.keep && v.pick != null)?.options[0];
+  const picture = useMemo(() => (r.thumb ? URL.createObjectURL(r.thumb) : picked?.google_id ? `/api/gphoto?id=${encodeURIComponent(picked.google_id)}` : null), [r.thumb, picked?.google_id]);
+
   return (
     <>
+      {picture && <img src={picture} alt="" style={{ width: '100%', aspectRatio: '4 / 3', objectFit: 'cover', borderRadius: 18, display: 'block', background: '#E8E1D6' }} />}
       <h1 className="h1" style={{ fontSize: 28 }}>{r.venues.length === 1 ? 'Found one place' : `${r.venues.length} possible places`}</h1>
       <div className="s">Ticked ones matched clearly. Anything unsure asks you first.</div>
-      <div className="card" style={{ padding: '4px 14px' }}>
+      <div className="card" style={{ padding: '4px 16px' }}>
         <div className="list">
           {r.venues.map((v, i) => (
-            <div key={i} className="col" style={{ padding: '10px 0', gap: 6 }}>
+            <div key={i} className="col venue" style={{ padding: '10px 0', gap: 6 }}>
               <label className="row" style={{ cursor: 'pointer' }}>
                 <input type="checkbox" checked={v.keep} onChange={(e) => upd(i, { keep: e.target.checked })} style={{ width: 22, height: 22, accentColor: '#1E1A16' }} />
                 <div className="grow">
@@ -292,11 +314,20 @@ function VenueReview({ t, r, setR, onDone }) {
                   </div>
                 </div>
               </label>
+              {v.keep && (
+                <div className="chips" style={{ paddingLeft: 32 }}>
+                  {Object.entries(CATS).map(([k, c]) => (
+                    <button key={k} className={'chip' + ((v.cat || 'explore') === k ? ' on' : '')} style={{ fontSize: 12, ...((v.cat || 'explore') === k ? { background: c.color, borderColor: c.color, color: '#fff' } : {}) }} onClick={() => upd(i, { cat: k, catSet: true })}>
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              )}
               {!v.sure && <FixName v={v} city={city} near={t?.trip.center_lat ? { lat: t.trip.center_lat, lng: t.trip.center_lng } : null} onFound={(patch) => upd(i, patch)} />}
               {!v.sure && v.options.length > 0 && (
                 <div className="chips" style={{ paddingLeft: 32 }}>
                   {v.options.map((o, k) => (
-                    <button key={k} className={'chip' + (v.pick === k ? ' on' : '')} style={{ fontSize: 12 }} onClick={() => upd(i, { pick: v.pick === k ? null : k, keep: true })}>
+                    <button key={k} className={'chip' + (v.pick === k ? ' on' : '')} style={{ fontSize: 12 }} onClick={() => { const pick = v.pick === k ? null : k; upd(i, { pick, keep: true, ...(v.catSet ? {} : { cat: catFor({ ...v, pick }, null) }) }); }}>
                       {o.name}{o.address ? ' · ' + o.address.split(' ').slice(-2).join(' ') : ''}
                     </button>
                   ))}

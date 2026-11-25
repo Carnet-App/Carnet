@@ -18,8 +18,8 @@ export function guessCategory(tag = '', text = '') {
   if (/nightclub|club|techno|rave|dance|party/.test(s)) return 'dance';
   if (/coffee|café|cafe|bakery|boulangerie|brunch/.test(s)) return 'coffee';
   if (/\bbar\b|pub|wine|cave|cocktail|biergarten|drink/.test(s)) return 'drink';
-  if (/restaurant|bistro|brasserie|food|fast_food|eat|dinner|lunch/.test(s)) return 'eat';
-  if (/museum|gallery|theatre|cinema|cinémathèque|arts_centre|exhibition|art/.test(s)) return 'culture';
+  if (/restaurant|bistro|brasserie|food|fast_food|\beat\b|dinner|lunch|pizza|ramen|tapas/.test(s)) return 'eat';
+  if (/museum|gallery|galerie|theatre|théâtre|cinema|cinéma|cinémathèque|arts_centre|exhibition|expo|\bart\b|concert|opera|opéra/.test(s)) return 'culture';
   return 'explore';
 }
 

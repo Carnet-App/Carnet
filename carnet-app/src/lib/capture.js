@@ -161,16 +161,27 @@ export async function readOverlay(canvas, box) {
   return lines.filter((l) => l.conf > 75 && /\p{L}{3,}/u.test(l.text)).map((l) => l.text.replace(/^[^\p{L}\p{N}@#📍]+/u, '')).join('\n');
 }
 
-// Caption first, then the words on the photo, then (only if both are empty) the rest of the screen.
-export function zonedCandidates(caption, overlay, text) {
-  const tag = (cs, where) => cs.map((c) => ({ ...c, why: `${where} · ${c.why}` }));
-  const cap = tag(venueCandidates(caption), 'caption').filter((c) => c.weight >= 2);
-  if (cap.some((c) => c.weight >= 4)) return cap;
-  // Overlay text is short and clean: "ROJO, Paris" → also try what comes before the comma.
-  const ovText = [overlay, ...overlay.split('\n').map((l) => l.split(/[,|–—]/)[0])].join('\n');
-  const ov = tag(venueCandidates(ovText), 'on the photo').map((c) => ({ ...c, weight: Math.max(c.weight, 4) }));
-  const both = [...cap, ...ov];
-  return both.length ? both : venueCandidates(text);
+// Two lines of evidence, in order:
+//  1. the screen's own text: a post's caption, or a website / app's clean UI text (the reader is
+//     confident about it, >= 80%);
+//  2. text inside pictures: words laid over a photo, read separately.
+// Anything else on screen is only a last resort.
+const tag = (cs, where) => cs.map((c) => ({ ...c, why: `${where} · ${c.why}` }));
+export function firstLine({ post, lines, height, text }) {
+  if (post) return tag(venueCandidates(post.caption), 'caption').filter((c) => c.weight >= 2);
+  const clean = (lines || []).filter((l) => l.conf >= 80 && l.text);
+  if (!clean.length) return tag(venueCandidates(text), 'text');
+  return tag(venueCandidates(clean.map((l) => l.text).join('\n'), clean, height), 'on screen');
+}
+export const isStrong = (cands) => cands.some((c) => c.weight >= 4);
+export function tieredCandidates(first, pictureText, text) {
+  if (isStrong(first)) return first;
+  // Picture text is short and clean: "ROJO, Paris" → also try what comes before the comma.
+  const pt = [pictureText, ...pictureText.split('\n').map((l) => l.split(/[,|–—]/)[0])].join('\n');
+  const pic = tag(venueCandidates(pt), 'in the picture').map((c) => ({ ...c, weight: Math.max(c.weight, 4) }));
+  const seen = new Set();
+  const both = [...first, ...pic].filter((c) => !seen.has(c.name.toLowerCase()) && seen.add(c.name.toLowerCase()));
+  return both.length ? both.sort((a, b) => b.weight - a.weight).slice(0, 8) : venueCandidates(text);
 }
 
 // "hidden bar in Le Marais" → where to look and what kind of place.
@@ -221,6 +232,8 @@ function junk(name) {
   if (/\d[.,]\d\s*[★*]|\(\d[\d,.]*\)/.test(name)) return true;   // ratings
   if (/€|£|\$/.test(name)) return true;
   if (UI.test(name)) return true;
+  // Article and list headlines: "Best natural wine in Paris", "10 places to eat in Berlin"
+  if (/^(the\s+)?(\d+\s+)?(best|top|our|where to|guide|favou?rite|must|hidden gems?)\b/i.test(name) || /\b(places|spots|bars|restaurants)\s+(to|in|for)\b/i.test(name)) return true;
   return false;
 }
 
@@ -231,6 +244,7 @@ export function venueCandidates(text, lines = null, height = 1) {
   const add = (name, why, weight) => {
     // OCR leaves icon debris at line ends ("ROJO oO m6 x"): drop trailing 1–2 character bits.
     name = name.replace(/(\s+\S{1,2})+\s*$/u, (m) => (/[A-ZÀ-Ý]{2}/.test(m) ? m : ''));
+    name = name.replace(/^\s*\d{1,2}[.)]\s+/, '');
     name = name.replace(/[#*_|•·]+/g, ' ').replace(/\s+/g, ' ').trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}')]+$/gu, '');
     if (name.length < 3 || name.length > 48 || junk(name)) return;
     const k = name.toLowerCase();
@@ -287,7 +301,9 @@ export function venueCandidates(text, lines = null, height = 1) {
   // The biggest text on screen (below the status bar) is usually the name.
   if (lines?.length) {
     const body = lines.filter((l) => l.y > height * 0.06 && l.text && l.conf > 75); // photos make low-confidence 'text'
-    const big = [...body].sort((a, b) => b.h - a.h).slice(0, 3);
+    // On a list page the numbered items are the places; the big text is the article title.
+    const listed = out.filter((o) => o.why === 'list item').length >= 2;
+    const big = listed ? [] : [...body].sort((a, b) => b.h - a.h).slice(0, 3);
     big.forEach((l, i) => add(l.text, 'largest text', 4 - i));
   }
   // Short title-case lines are weak guesses (skipped on map screenshots: street labels).

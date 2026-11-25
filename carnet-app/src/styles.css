@@ -65,7 +65,16 @@ textarea.in { height: 80px; padding: 10px 12px; resize: vertical; }
 
 .sheet-back { position: fixed; inset: 0; background: rgba(30,26,22,.32); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
 .sheet { background: var(--bg); width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; border-radius: 24px 24px 0 0; padding: 10px 20px calc(24px + var(--safe-b)); display: flex; flex-direction: column; gap: 12px; animation: up .22s ease; }
-.sheet.full { max-height: 100vh; height: 100vh; border-radius: 0; padding-top: calc(var(--safe-t) + 14px); }
+.sheet.full { max-height: 100vh; height: 100vh; max-height: 100dvh; height: 100dvh; border-radius: 0; padding-top: calc(var(--safe-t) + 14px); }
+/* Roomier layout for screens you read and decide on (capture, review). */
+.sheet.roomy { gap: 22px; padding-left: 22px; padding-right: 22px; }
+.sheet.roomy .h1 { margin: 10px 0 0; line-height: 1.1; }
+.sheet.roomy .h1 + .s { margin-top: -12px; }
+.sheet.roomy .card.dark { padding: 20px 20px; }
+.sheet.roomy label.f { gap: 10px; }
+.sheet.roomy .hint { margin-top: 4px; line-height: 1.5; }
+.sheet.roomy .venue { padding: 16px 0 !important; gap: 10px !important; }
+.sheet.roomy .venue .chips { gap: 8px; }
 .sheet > * { flex: none; }
 .grab { width: 40px; height: 4px; border-radius: 4px; background: #D9D0C2; align-self: center; flex: none; }
 @keyframes up { from { transform: translateY(30px); opacity: .6 } to { transform: none; opacity: 1 } }
