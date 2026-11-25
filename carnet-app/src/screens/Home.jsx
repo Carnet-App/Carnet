@@ -101,7 +101,7 @@ export default function Home({ me, go }) {
         ))}
       </div>
       {!cities.length && <div className="s">Start a trip or add a city, then send screenshots and links in — they’ll land in that city’s guide.</div>}
-      <div className="s" style={{ textAlign: 'center' }}>Signed in as {me}</div>
+      <div className="s" style={{ textAlign: 'center' }}>Signed in as {me}<br /><span style={{ opacity: 0.6, fontSize: 12 }}>Version {__BUILD__} UTC</span></div>
       {(s.failed.length > 0 || s.outbox.length > 0) && (
         <div className="card s">
           {s.outbox.length} waiting to send · {s.failed.length} refused by the server{s.failed.length ? <> — last reason: “{s.failed[s.failed.length - 1].error}”</> : ''}

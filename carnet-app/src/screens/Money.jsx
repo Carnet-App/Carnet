@@ -3,7 +3,7 @@ import { Sheet, Seg, Icon, Avatar } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
 import { balances, simplify, pairwise, evenShares, itemShares } from '../lib/money';
 import { parseReceipt } from '../lib/receipt';
-import { readImage, thumbBlob } from '../lib/capture';
+import { loadImage, toCanvas, readReceipt, thumbBlob } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { money, nameOf } from '../lib/util';
 import { notify } from '../lib/push';
@@ -141,12 +141,16 @@ function ReceiptSplit({ t, me, onClose }) {
     if (!file) return;
     setBusy('Reading the receipt on your phone…');
     try {
-      const res = await readImage(file);
+      const { img } = await loadImage(file);
+      const photo = toCanvas(img, 2400);
+      // Cut out the paper, turn it upright, even out the light, read it row by row.
+      const res = await readReceipt(photo, setBusy);
       const parsed = parseReceipt(res.text);
-      setThumb(await thumbBlob(res.canvas, 900));
+      setThumb(await thumbBlob(photo, 900));
       setR(parsed);
-      setLines(parsed.lines.map((l) => ({ ...l, who: [...emails] })));
-      setTip(parsed.serviceIncluded ? 0 : 0);
+      setLines(parsed.lines.filter((l) => !l.service).map((l) => ({ ...l, who: [...emails] })));
+      // "Service charge (12.5%)" printed on the bill → pre-fill it; "service compris" → none.
+      setTip(parsed.serviceIncluded ? 0 : parsed.servicePct || 0);
       setTitle(res.text.split('\n').map((s) => s.trim()).find((s) => /[A-Za-z]{3}/.test(s) && s.length < 40) || 'Dinner');
       setBusy('');
     } catch (e) { setBusy('Couldn’t read that: ' + e.message); }

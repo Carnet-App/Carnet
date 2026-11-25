@@ -26,7 +26,7 @@ export async function loadImage(fileOrBlob) {
   return { img, url };
 }
 
-function toCanvas(src, maxW = 1600) {
+export function toCanvas(src, maxW = 1600) {
   const w = src.videoWidth || src.naturalWidth || src.width;
   const h = src.videoHeight || src.naturalHeight || src.height;
   const s = Math.min(1, maxW / w);
@@ -52,6 +52,107 @@ export async function readText(canvasOrImg, onProgress) {
   for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || [])
     lines.push({ text: (l.text || '').trim(), y: l.bbox.y0, h: l.bbox.y1 - l.bbox.y0, conf: l.confidence });
   return { text: data.text || '', lines, height: canvasOrImg.height || 1 };
+}
+
+// ── Receipts ──────────────────────────────────────────────────────────
+// Photos of receipts come with tables, hands, shadows and sideways paper. Before reading:
+// cut out the paper, turn it upright, even out the light, and read it as rows (so each item
+// stays on the same line as its price).
+function paperBox(src) {
+  const w = 400, s = w / src.width, h = Math.round(src.height * s);
+  const c = globalThis.__mkCanvas ? globalThis.__mkCanvas() : document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(src, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const rows = new Float32Array(h), cols = new Float32Array(w);
+  // "Bright" relative to this photo's own light: a receipt in a dim restaurant is still the brightest thing.
+  const lum = [];
+  for (let i = 0; i < d.length; i += 16) lum.push(0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2]);
+  lum.sort((a, b) => a - b);
+  const bright = Math.max(90, lum[Math.floor(lum.length * 0.95)] * 0.72);
+  for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+    const i = (y * w + x) * 4, lo = Math.min(d[i], d[i + 1], d[i + 2]), hi = Math.max(d[i], d[i + 1], d[i + 2]);
+    if (0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2] > bright && hi - lo < 70) { rows[y]++; cols[x]++; }
+  }
+  const run = (arr, n, min) => { // longest stretch where enough of the line is paper
+    let best = [0, n], cur = -1, gap = 0;
+    for (let i = 0; i <= n; i++) {
+      if (i < n && arr[i] >= min) { if (cur < 0) cur = i; gap = 0; }
+      else if (cur >= 0 && (++gap > n * 0.03 || i === n)) { const e = i - gap + 1; if (e - cur > best[1] - best[0] || best[1] - best[0] === n) best = [cur, e]; cur = -1; gap = 0; }
+    }
+    return best;
+  };
+  const [y0, y1] = run(rows, h, w * 0.12);
+  const [x0, x1] = run(cols, w, (y1 - y0) * 0.12);
+  const pad = 0.03;
+  const bx = Math.max(0, (x0 / s) - src.width * pad), by = Math.max(0, (y0 / s) - src.height * pad);
+  const bw = Math.min(src.width - bx, (x1 - x0) / s + src.width * pad * 2), bh = Math.min(src.height - by, (y1 - y0) / s + src.height * pad * 2);
+  // A "paper" that's most of the photo or a sliver isn't a useful crop.
+  if (bw * bh > src.width * src.height * 0.92 || bw < src.width * 0.15 || bh < src.height * 0.15) return { x: 0, y: 0, w: src.width, h: src.height };
+  return { x: bx, y: by, w: bw, h: bh };
+}
+function prepared(src, box, angle, width) {
+  const rot = angle % 180 !== 0;
+  const s = width / (rot ? box.h : box.w);
+  const W = Math.round((rot ? box.h : box.w) * s), H = Math.round((rot ? box.w : box.h) * s);
+  const c = globalThis.__mkCanvas ? globalThis.__mkCanvas() : document.createElement('canvas');
+  c.width = W; c.height = H;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.translate(W / 2, H / 2);
+  g.rotate((angle * Math.PI) / 180);
+  g.drawImage(src, box.x, box.y, box.w, box.h, -(box.w * s) / 2, -(box.h * s) / 2, box.w * s, box.h * s);
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  // Even out the light: compare each pixel with its neighbourhood (shadows and glare cancel out).
+  const img = g.getImageData(0, 0, W, H), d = img.data;
+  const gray = new Float32Array(W * H);
+  for (let i = 0; i < W * H; i++) gray[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
+  const I = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += gray[y * W + x]; I[(y + 1) * (W + 1) + x + 1] = I[y * (W + 1) + x + 1] + row; } }
+  const r = Math.max(8, Math.round(W / 40));
+  for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
+    const xa = Math.max(0, x - r), xb = Math.min(W, x + r + 1), ya = Math.max(0, y - r), yb = Math.min(H, y + r + 1);
+    const mean = (I[yb * (W + 1) + xb] - I[ya * (W + 1) + xb] - I[yb * (W + 1) + xa] + I[ya * (W + 1) + xa]) / ((xb - xa) * (yb - ya));
+    const v = mean < 115 ? 255 : gray[y * W + x] < mean * 0.86 ? 0 : 255; // dark surroundings (table, hand) → blank
+    const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
+  }
+  g.putImageData(img, 0, 0);
+  return c;
+}
+async function readRows(canvas) {
+  const w = await ocrWorker();
+  await w.setParameters({ tessedit_pageseg_mode: '6', preserve_interword_spaces: '1' }); // one block of rows
+  try {
+    const { data } = await w.recognize(canvas.toBuffer ? canvas.toBuffer('image/png') : canvas);
+    return { text: data.text || '', conf: data.confidence || 0 };
+  } finally {
+    await w.setParameters({ tessedit_pageseg_mode: '3', preserve_interword_spaces: '0' });
+  }
+}
+const priceCount = (t) => (t.match(/[£€$]?\s?\d{1,4}[.,]\d{2}\b/g) || []).length;
+export async function readReceipt(src, onProgress) {
+  const box = paperBox(src);
+  // Which way up? Read a small copy each way and keep the one with the most prices and best confidence.
+  let best = null;
+  let box2 = box;
+  const portrait = box.h >= box.w;
+  for (const angle of portrait ? [0, 90, 270] : [90, 270, 0]) {
+    onProgress?.('Finding which way up it is…');
+    let t = await readRows(prepared(src, box, angle, 900));
+    // Cut-out found no prices at all? Try the whole photo before giving up on this way up.
+    if (!priceCount(t.text) && box.w * box.h < src.width * src.height * 0.9) {
+      const whole = { x: 0, y: 0, w: src.width, h: src.height };
+      const t2 = await readRows(prepared(src, whole, angle, 900));
+      if (priceCount(t2.text) > priceCount(t.text)) { t = t2; box2 = whole; } else box2 = box;
+    } else box2 = box;
+    const score = priceCount(t.text) * 10 + t.conf;
+    if (!best || score > best.score) best = { angle, score, box: box2 };
+    if (priceCount(t.text) >= 3 && t.conf > 70) break; // clearly readable: no need to try the others
+  }
+  onProgress?.('Reading the receipt…');
+  const c = prepared(src, best.box, best.angle, 1800);
+  const r = await readRows(c);
+  return { ...r, angle: best.angle, canvas: c };
 }
 
 export async function readImage(file, onProgress) {
