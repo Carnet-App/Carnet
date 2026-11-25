@@ -1,3 +1,4 @@
+import { parseReceipt } from './receipt.js';
 import { handleName, squashName } from './match.js';
 // Reading screenshots, screen recordings, receipts and tickets — all on the phone.
 import jsQR from 'jsqr';
@@ -114,6 +115,9 @@ function paperBox(src) {
   if (bw * bh > src.width * src.height * 0.92 || bw < src.width * 0.15 || bh < src.height * 0.15) return { x: 0, y: 0, w: src.width, h: src.height };
   return { x: bx, y: by, w: bw, h: bh };
 }
+// Receipt image preparation: 'sauvola' (default), 'local' (the old fixed threshold), 'gray'.
+let RECEIPT_PREP = 'sauvola';
+export const _setReceiptPrep = (m) => { RECEIPT_PREP = m; };
 function prepared(src, box, angle, width) {
   const rot = angle % 180 !== 0;
   const s = width / (rot ? box.h : box.w);
@@ -131,11 +135,35 @@ function prepared(src, box, angle, width) {
   for (let i = 0; i < W * H; i++) gray[i] = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2];
   const I = new Float64Array((W + 1) * (H + 1));
   for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { row += gray[y * W + x]; I[(y + 1) * (W + 1) + x + 1] = I[y * (W + 1) + x + 1] + row; } }
-  const r = Math.max(8, Math.round(W / 40));
+  // Paper brightness, from the brighter half of the crop: what "background" means for this photo.
+  const hist = new Uint32Array(256);
+  for (let i = 0; i < W * H; i++) hist[Math.min(255, gray[i] | 0)]++;
+  const pct = (p) => { let n = 0; for (let v = 0; v < 256; v++) { n += hist[v]; if (n >= W * H * p) return v; } return 255; };
+  const paper = Math.max(60, pct(0.75));
+  if (RECEIPT_PREP === 'gray') {
+    // Contrast stretch only, Tesseract binarises itself.
+    const lo = pct(0.02), hi = paper;
+    for (let i = 0; i < W * H; i++) { const v = Math.max(0, Math.min(255, ((gray[i] - lo) / Math.max(1, hi - lo)) * 255)); d[i * 4] = d[i * 4 + 1] = d[i * 4 + 2] = v; d[i * 4 + 3] = 255; }
+    g.putImageData(img, 0, 0);
+    return c;
+  }
+  const I2 = new Float64Array((W + 1) * (H + 1));
+  for (let y = 0; y < H; y++) { let row = 0; for (let x = 0; x < W; x++) { const v = gray[y * W + x]; row += v * v; I2[(y + 1) * (W + 1) + x + 1] = I2[y * (W + 1) + x + 1] + row; } }
+  const r = RECEIPT_PREP === 'local' ? Math.max(8, Math.round(W / 40)) : Math.max(10, Math.round(W / 30));
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const xa = Math.max(0, x - r), xb = Math.min(W, x + r + 1), ya = Math.max(0, y - r), yb = Math.min(H, y + r + 1);
-    const mean = (I[yb * (W + 1) + xb] - I[ya * (W + 1) + xb] - I[yb * (W + 1) + xa] + I[ya * (W + 1) + xa]) / ((xb - xa) * (yb - ya));
-    const v = mean < 115 ? 255 : gray[y * W + x] < mean * 0.86 ? 0 : 255; // dark surroundings (table, hand) → blank
+    const n = (xb - xa) * (yb - ya);
+    const sum = (A) => A[yb * (W + 1) + xb] - A[ya * (W + 1) + xb] - A[yb * (W + 1) + xa] + A[ya * (W + 1) + xa];
+    const mean = sum(I) / n;
+    let v;
+    if (RECEIPT_PREP === 'local') v = mean < 115 ? 255 : gray[y * W + x] < mean * 0.86 ? 0 : 255;
+    else {
+      // Sauvola, with the dynamic range taken from this photo's paper, not a fixed 128: dim
+      // restaurant photos keep their print. Only areas far darker than the paper (table, hand) blank.
+      const sd = Math.sqrt(Math.max(0, sum(I2) / n - mean * mean));
+      const R = Math.max(32, paper / 2);
+      v = mean < paper * 0.35 ? 255 : gray[y * W + x] < mean * (1 + 0.2 * (sd / R - 1)) ? 0 : 255;
+    }
     const i = (y * W + x) * 4; d[i] = d[i + 1] = d[i + 2] = v; d[i + 3] = 255;
   }
   g.putImageData(img, 0, 0);
@@ -143,10 +171,82 @@ function prepared(src, box, angle, width) {
 }
 async function readRows(canvas) {
   const data = await recognise(canvas, 'rows'); // one block of rows
-  return { text: data.text || '', conf: data.confidence || 0 };
+  const rows = [];
+  for (const b of data.blocks || []) for (const p of b.paragraphs || []) for (const l of p.lines || [])
+    rows.push({ text: (l.text || '').replace(/\n$/, ''), y0: l.bbox.y0, y1: l.bbox.y1, x0: l.bbox.x0 });
+  return { text: data.text || '', conf: data.confidence || 0, rows };
+}
+
+// Faint price column (dim restaurant photo, print fading on the right): read the right-hand part
+// on its own, without the threshold that wiped it, and put each amount back on the line at the
+// same height. Only lines that have a name and no amount are filled.
+const HAS_AMOUNT = /\d[.,]\s?\d{2}(?!\d)/;
+async function recoverColumn(src, box, angle, main) {
+  const was = RECEIPT_PREP;
+  RECEIPT_PREP = 'gray';
+  const full = prepared(src, box, angle, 1800);
+  RECEIPT_PREP = was;
+  const x = Math.round(full.width * 0.58), w = full.width - x;
+  const k = 1.5;
+  const c = globalThis.__mkCanvas ? globalThis.__mkCanvas() : document.createElement('canvas');
+  c.width = Math.round(w * k); c.height = Math.round(full.height * k);
+  const g = c.getContext('2d');
+  g.drawImage(full, x, 0, w, full.height, 0, 0, c.width, c.height);
+  const col = await readRows(c);
+  const found = col.rows.filter((r) => HAS_AMOUNT.test(r.text)).map((r) => ({ text: r.text.trim(), y: (r.y0 + r.y1) / 2 / k }));
+  if (!found.length) return null;
+  const used = new Set();
+  let added = 0;
+  const lines = main.rows.map((r) => {
+    if (HAS_AMOUNT.test(r.text) || !/\p{L}{3}/u.test(r.text)) return r.text;
+    const mid = (r.y0 + r.y1) / 2, h = Math.max(12, r.y1 - r.y0);
+    let best = null;
+    for (const [i, a] of found.entries()) if (!used.has(i) && Math.abs(a.y - mid) < h * 0.7 && (!best || Math.abs(a.y - mid) < Math.abs(best.a.y - mid))) best = { i, a };
+    if (!best) return r.text;
+    used.add(best.i);
+    added++;
+    return `${r.text}  ${best.a.text}`;
+  });
+  return added ? { text: lines.join('\n'), added } : null;
 }
 const priceCount = (t) => (t.match(/[£€$]?\s?\d{1,4}[.,]\d{2}\b/g) || []).length;
+// A screenshot of a photo (the Photos app, a chat): the phone's own interface above and below is
+// plain white or black. Keep only the photo, so the receipt is found inside it, not the white UI.
+export function screenshotPhoto(src) {
+  if (src.height / src.width < 1.9) return src;
+  const w = 200, k = w / src.width, h = Math.round(src.height * k);
+  const c = globalThis.__mkCanvas ? globalThis.__mkCanvas() : document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(src, 0, 0, w, h);
+  const d = g.getImageData(0, 0, w, h).data;
+  const ui = new Uint8Array(h);
+  for (let y = 0; y < h; y++) {
+    let flat = 0;
+    for (let x = 0; x < w; x++) {
+      const i = (y * w + x) * 4, l = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+      const chroma = Math.max(d[i], d[i + 1], d[i + 2]) - Math.min(d[i], d[i + 1], d[i + 2]);
+      if ((l > 236 && chroma < 16) || l < 10) flat++;
+    }
+    ui[y] = flat > w * 0.92 ? 1 : 0;
+  }
+  // The longest stretch of picture rows (short gaps allowed).
+  let best = [0, 0], cur = -1, gap = 0;
+  const maxGap = Math.round(h * 0.015);
+  for (let y = 0; y <= h; y++) {
+    if (y < h && !ui[y]) { if (cur < 0) cur = y; gap = 0; }
+    else if (cur >= 0 && (++gap > maxGap || y === h)) { const e = y - gap + 1; if (e - cur > best[1] - best[0]) best = [cur, e]; cur = -1; gap = 0; }
+  }
+  const len = best[1] - best[0];
+  if (len < h * 0.25 || len > h * 0.88) return src;
+  const y0 = Math.round(best[0] / k), y1 = Math.round(best[1] / k);
+  const out = globalThis.__mkCanvas ? globalThis.__mkCanvas() : document.createElement('canvas');
+  out.width = src.width; out.height = y1 - y0;
+  out.getContext('2d').drawImage(src, 0, y0, src.width, y1 - y0, 0, 0, src.width, y1 - y0);
+  return out;
+}
 export async function readReceipt(src, onProgress) {
+  src = screenshotPhoto(src);
   const box = paperBox(src);
   // Which way up? Read a small copy each way and keep the one with the most prices and best confidence.
   let best = null;
@@ -166,9 +266,37 @@ export async function readReceipt(src, onProgress) {
     if (priceCount(t.text) >= 3 && t.conf > 70) break; // clearly readable: no need to try the others
   }
   onProgress?.('Reading the receipt…');
-  const c = prepared(src, best.box, best.angle, 1800);
-  const r = await readRows(c);
-  return { ...r, angle: best.angle, canvas: c };
+  // Two ways of evening out the light suit different photos (Sauvola keeps faint and dim print,
+  // the older fixed threshold suits small screenshots). Read with the first; if the lines don't
+  // add up to a printed total, read with the second too and keep the better reading.
+  const tries = RECEIPT_PREP === 'sauvola' ? ['sauvola', 'local'] : [RECEIPT_PREP];
+  let pick = null;
+  for (const mode of tries) {
+    const was = RECEIPT_PREP;
+    RECEIPT_PREP = mode;
+    const c = prepared(src, best.box, best.angle, 1800);
+    RECEIPT_PREP = was;
+    const r = await readRows(c);
+    const p = parseReceipt(r.text);
+    const score = (p.validation === 'reconciled' ? 1000 : 0) + (p.printedTotal != null ? 50 : 0) + 10 * p.lines.length + r.conf / 10;
+    if (!pick || score > pick.score) pick = { ...r, score, canvas: c, prep: mode, parsed: p };
+    if (p.validation === 'reconciled') break;
+    if (mode !== tries[tries.length - 1]) onProgress?.('Having another look…');
+  }
+  // Item names with no prices next to them: the price column faded. Try to recover it.
+  if (pick.parsed.validation !== 'reconciled') {
+    const named = pick.rows.filter((r) => /\p{L}{3}/u.test(r.text) && !HAS_AMOUNT.test(r.text)).length;
+    if (named >= 3 && pick.parsed.lines.length < named) {
+      onProgress?.('Looking closer at the prices…');
+      const rec = await recoverColumn(src, best.box, best.angle, pick).catch(() => null);
+      if (rec) {
+        const p = parseReceipt(rec.text);
+        const score = (p.validation === 'reconciled' ? 1000 : 0) + (p.printedTotal != null ? 50 : 0) + 10 * p.lines.length + pick.conf / 10;
+        if (score > pick.score) pick = { ...pick, text: rec.text, score, recovered: rec.added };
+      }
+    }
+  }
+  return { text: pick.text, conf: pick.conf, angle: best.angle, canvas: pick.canvas, prep: pick.prep, recovered: pick.recovered || 0 };
 }
 
 export async function readImage(file, onProgress) {

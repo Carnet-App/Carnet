@@ -175,7 +175,9 @@ function CostSheet({ t, me, e, onClose }) {
 function ReceiptSplit({ t, me, onClose }) {
   const fileRef = useRef();
   const emails = t.members.map((m) => m.email.toLowerCase());
-  const cur = (t.trip.currency || 'EUR').toUpperCase();
+  const tripCur = (t.trip.currency || 'EUR').toUpperCase();
+  // The receipt's own currency when it prints one (a £ bill on a € trip stays in £).
+  const [cur, setCur] = useState(tripCur);
   const [id] = useState(() => uid());
   const [busy, setBusy] = useState('');
   const [r, setR] = useState(null);
@@ -207,11 +209,14 @@ function ReceiptSplit({ t, me, onClose }) {
       // A printed service amount is kept as its own line (F1); a printed % with no amount
       // pre-fills the tip; "service compris" → none.
       const start = splitInputs(parsed);
-      setLines(start.lines.map((l) => ({ ...l, who: [...emails] })));
+      // Only a total or amount paid read (a payment slip): start from it as one line.
+      const startLines = start.lines.length ? start.lines : parsed.printedTotal ? [{ name: 'Total', price: parsed.printedTotal }] : [];
+      setLines(startLines.map((l) => ({ ...l, who: [...emails] })));
       setAdjustments(start.adjustments);
       setTip(start.tipPct);
       // The shop's name: the first real-looking line, without reader debris around it ("i  CAFE JACKS").
       const clean = (x) => x.replace(/^(\S{1,2}\s+)+/, '').replace(/(\s+\S{1,3})+$/, '').trim();
+      if (parsed.currency) setCur(parsed.currency);
       setTitle(res.text.split('\n').map(clean).find((x) => /\p{L}{4,}/u.test(x) && x.length < 40 && (x.match(/\p{L}/gu) || []).length / x.replace(/\s/g, '').length > 0.7) || 'Dinner');
       setBusy('');
     } catch (e) { setBusy('Couldn’t read that: ' + e.message); }
@@ -266,12 +271,14 @@ function ReceiptSplit({ t, me, onClose }) {
         <>
           <input className="in" value={title} onChange={(e) => setTitle(e.target.value)} style={{ font: '400 26px var(--serif)', border: 0, background: 'transparent', padding: 0 }} aria-label="Name for this bill" placeholder="Name this bill" />
           <label className="f">Paid by<select className="in" value={payer} onChange={(e) => setPayer(e.target.value)}>{t.members.map((m) => <option key={m.id} value={m.email.toLowerCase()}>{m.name || m.email}</option>)}</select></label>
+          {cur !== tripCur && <div className="s">This bill is in {cur}; the trip uses {tripCur}. It’s kept in {cur} and settled separately. <button className="link" onClick={() => setCur(tripCur)}>Use {tripCur} instead</button></div>}
           <Seg value={mode} onChange={setMode} options={[['item', 'Per item'], ['even', 'Evenly'], ['pct', 'By %']]} label="Split method" />
           <div className="card" style={{ padding: '2px 12px' }}>
             <div className="list">
               {lines.map((l, i) => (
                 <div key={i} className="row" style={{ padding: '7px 0', flexWrap: 'wrap', gap: 6 }}>
                   <input className="in grow" style={{ height: 36, font: '500 15px var(--serif)', border: 0, padding: 0, background: 'transparent', minWidth: 120 }} value={l.name} onChange={(e) => setLines(lines.map((x, j) => (j === i ? { ...x, name: e.target.value } : x)))} placeholder="Item" />
+                  {(l.quantity > 1 || l.unitPrice) && <span className="s" style={{ whiteSpace: 'nowrap' }}>{l.quantity > 1 ? `${l.quantity} × ` : ''}{l.unitPrice ? money(l.unitPrice, cur) : ''}</span>}
                   {mode === 'item' && (
                     <div className="row" style={{ gap: 4 }}>
                       {t.members.map((m, k) => {
@@ -294,7 +301,7 @@ function ReceiptSplit({ t, me, onClose }) {
           </div>
           {adjustments.map((a, i) => (
             <div key={i} className="between">
-              <div><div style={{ font: '500 13px var(--sans)' }}>{a.label || 'Service'} on the bill</div><div className="s">Shared in proportion to what each had</div></div>
+              <div><div style={{ font: '500 13px var(--sans)' }}>{a.kind === 'discount' ? a.label || 'Discount' : `${a.label || 'Service'} on the bill`}</div><div className="s">{a.kind === 'discount' ? 'Taken off in proportion to what each had' : 'Shared in proportion to what each had'}</div></div>
               <div className="row" style={{ gap: 6 }}>
                 <input className="in" inputMode="decimal" style={{ width: 74, height: 36, textAlign: 'right' }} value={a.amount} onChange={(e) => setAdjustments(adjustments.map((x, j) => (j === i ? { ...x, amount: e.target.value.replace(',', '.') } : x)))} aria-label="Service amount" />
                 <button className="link" onClick={() => setAdjustments(adjustments.filter((_, j) => j !== i))}>Remove</button>
@@ -320,7 +327,9 @@ function ReceiptSplit({ t, me, onClose }) {
           </div>
           {r.validation && check.status === 'difference' && <div className="card dashed s">The receipt’s total says {money(r.printedTotal, cur)}; the lines and service come to {money(r.printedTotal - shown(check.diff), cur)}, {money(Math.abs(shown(check.diff)), cur)} {check.diff > 0 ? 'short' : 'over'}. Check for a missed or misread line — nobody’s share absorbs the gap.</div>}
           {r.validation && check.status === 'reconciled' && r.lines?.length > 0 && <div className="s">✓ Adds up to the receipt’s total of {money(r.printedTotal, cur)}.</div>}
-          {r.validation && !r.lines?.length && <div className="card dashed s">Couldn’t pick out any prices. A straight, flat photo of the paper receipt (not a screenshot) works best — or add the lines yourself.</div>}
+          {r.validation && !r.lines?.length && (r.printedTotal
+            ? <div className="card dashed s">Only the total ({money(r.printedTotal, cur)}) could be read, no item lines. It’s added as one line: split it evenly, or add the items yourself.</div>
+            : <div className="card dashed s">{r.anyMoney === false ? 'This doesn’t look like a bill: there are no prices on it.' : 'Couldn’t pick out any prices. A straight, flat photo of the paper receipt works best — or add the lines yourself.'}</div>)}
           {r.validation && check.status === 'unverified' && r.lines?.length > 0 && <div className="card dashed s">No total found on the receipt, so these lines couldn’t be checked against it. Worth a quick look.</div>}
           <div className="card dark col">
             <div className="between"><span className="k" style={{ color: 'var(--gold)' }}>Total {money(shown(result.total), cur)}</span>{tip ? <span className="s" style={{ color: '#B7AC9C' }}>incl. {tip}% tip</span> : null}</div>

@@ -42,7 +42,7 @@ test('a printed total that does not match is a difference, not reconciled', () =
   assert.equal(r.validation, 'difference');
 });
 
-test('quantities are kept as separate fields, not folded into the name', { todo: 'Phase 4 — quantity, unit price and line total as distinct fields' }, () => {
+test('quantities are kept as separate fields, not folded into the name', () => {
   const l = parseReceipt('3 Tesco All Butter Croissant £6.45\n£2.15 each').lines[0];
   assert.equal(l.quantity, 3);
   assert.equal(l.unitPrice, 2.15);
@@ -54,4 +54,81 @@ test('F3: the check follows edits — fixing a misread line reconciles, breaking
   assert.deepEqual(checkTotal(3600, 3200, 400), { status: 'reconciled', diff: 0 });
   assert.deepEqual(checkTotal(null, 3200, 0), { status: 'unverified', diff: null });
   assert.equal(checkTotal(3600, 3200, 0, 12.5).status, 'reconciled');
+});
+
+// Layouts seen on real receipts, written out with made-up items.
+const P = (t) => parseReceipt(t);
+const prices = (r) => r.lines.filter((l) => !l.service).map((l) => l.price);
+
+test('quantity × unit price columns, VAT codes after the amounts', () => {
+  const r = P('WATER 0,75 L 2,000 x 4,40 E+ 8,80\nSPRITZ 4,000 x 7,00 E+ 28,00\nBURGER 1,000 x 11,50 F- 11,50\nUKUPNO € 48,30');
+  assert.deepEqual(prices(r), [8.8, 28, 11.5]);
+  assert.equal(r.lines[0].quantity, 2);
+  assert.equal(r.lines[0].unitPrice, 4.4);
+  assert.equal(r.validation, 'reconciled');
+});
+
+test('name on one line, unit / quantity / total on the next', () => {
+  const r = P('CAULIFLOWER PISTACHIO\n14,50 2,00 29,00 H\nPULLED PORK 21,00 1,00 21,00 H\nUkupno: 50,00 EUR');
+  assert.deepEqual(prices(r), [29, 21]);
+  assert.equal(r.lines[0].name, 'CAULIFLOWER PISTACHIO');
+  assert.equal(r.lines[0].quantity, 2);
+  assert.equal(r.validation, 'reconciled');
+});
+
+test('"2 x £5.00 £10.00" under its name; "£2.25 each" is a unit price, not an item', () => {
+  const r = P('2 Almond Croissant\n2 x £5.00 £10.00\n2 Natas £3.50\nTotal £13.50');
+  assert.deepEqual(prices(r), [10, 3.5]);
+  assert.equal(r.lines[0].quantity, 2);
+  assert.equal(r.lines[0].unitPrice, 5);
+  const t = P('2 Mini Pastries £4.50\n£2.25 each\n1 Plait £2.10\nTOTAL: £6.60');
+  assert.deepEqual(prices(t), [4.5, 2.1]);
+  assert.equal(t.lines[0].unitPrice, 2.25);
+});
+
+test('unit and line-total columns; "1x" quantities with a VAT letter', () => {
+  const r = P('1 Doppelter Espresso 4,20 4,20 A\n1 Salat 5,50 5,50 A\nSumme in € 9,70');
+  assert.deepEqual(prices(r), [4.2, 5.5]);
+  const b = P('1x cappuchino 3,70 A\n1x nachos 11,50 B\n1x Samen doorgeven 0,00 D\nA 21% 3,70\nBTW: 0,64\nTotaal: EUR 15,20\nBancontact 15,20');
+  assert.deepEqual(prices(b), [3.7, 11.5]);
+  assert.equal(b.validation, 'reconciled');
+});
+
+test('the total the lines add up to wins over "balance to pay" after a deposit', () => {
+  const r = P('1 Camera Body 1599.00\nTotal: 1599.00\nMc 159.90\nSale Value: 1599.00\nTotal Deposit: 159.90\nBalance To Pay: 1439.10');
+  assert.deepEqual(prices(r), [1599]);
+  assert.equal(r.printedTotal, 1599);
+  assert.equal(r.validation, 'reconciled');
+});
+
+test('savings are discounts; a percentage service line is the service', () => {
+  const r = P('PEPPERS £0.70\nCHICKEN £9.50\nBalance before Saving £10.20\nPrice Saving -£0.01\nBalance to Pay £10.19');
+  assert.deepEqual(prices(r), [0.7, 9.5]);
+  assert.deepEqual(r.adjustments.map((a) => a.amount), [-0.01]);
+  assert.equal(r.validation, 'reconciled');
+  const s = P('1 Chicken = 16.80\n2 Mojito = 16.00\nSubtotal 32.80\n12.5% Serv 4.10\nTotal £36.90');
+  assert.equal(s.lines.find((l) => l.service).price, 4.1);
+  assert.equal(s.validation, 'reconciled');
+  assert.equal(s.currency, 'GBP');
+});
+
+test('tax tables and card slips are not items', () => {
+  const r = P('Linguine 20,00€ 20,00€\nTOTAL TTC 20,00€\nSoit par client 6,66€\nPDV 13% 13,00 111,50 14,50\nNetto 61,25');
+  assert.deepEqual(prices(r), [20]);
+  assert.equal(r.currency, 'EUR');
+});
+
+test('the amount paid backs up a total that was missed or misread', () => {
+  const r = parseReceipt('2 Natas £3.50\n2 Croissant £3.50\nTotal\nVAT 20% £1.17\nCard payment £7.00');
+  assert.equal(r.printedTotal, 7);
+  assert.equal(r.validation, 'reconciled', 'the VAT line under a bare "Total" is not the total');
+  const s = parseReceipt('Food Paper Ba £0.40\nCALDON GLD SL £10.75\nBalance to Pay £11.15\nYour total saving today is £0.01');
+  assert.equal(s.printedTotal, 11.15, '"total saving" is not the total');
+});
+
+test('a payment slip with no item lines: the amount, nothing to check it against', () => {
+  const r = parseReceipt('DETTAGLIO PAGAMENTI: 313.36\nC. CREDITO');
+  assert.equal(r.printedTotal, 313.36);
+  assert.equal(r.validation, 'unverified');
+  assert.equal(r.lines.length, 0);
 });

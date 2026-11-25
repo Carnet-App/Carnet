@@ -15,6 +15,7 @@ if (!FIX) { console.log('CARNET_FIXTURES not set: private fixtures unavailable, 
 const man = JSON.parse(readFileSync(path.join(FIX, 'manifest.json'), 'utf8'));
 const model = process.env.CARNET_OCR_MODEL || 'app';
 const { capture: C, receipt: R } = await loadApp({ model });
+if (process.env.CARNET_RECEIPT_PREP) C._setReceiptPrep(process.env.CARNET_RECEIPT_PREP);
 let peak = 0; const tick = setInterval(() => { peak = Math.max(peak, process.memoryUsage().rss); }, 50);
 
 const detail = { config, versions: versions(model), when: new Date().toISOString(), travel: [], receipts: [] };
@@ -24,7 +25,7 @@ const ci = (k, n) => { const [a, b] = wilson(k, n); return n ? `${Math.round(a *
 // ── Travel
 const t = { labelled: 0, found: 0, exact: 0, proposed: 0, correct: 0, wrong: 0, nameless: 0, negFalse: 0, ms: [] };
 const cerBy = {};
-for (const f of man.travel) {
+for (const f of process.argv.includes('--receipts-only') ? [] : man.travel) {
   if (only && !f.id.includes(only)) continue;
   const res = await extractTravel(C, await imageCanvas(path.join(FIX, f.file)));
   const hits = f.places.map((p) => res.shown.map((s) => matchPlace(s.name, p)).find(Boolean) || null);
