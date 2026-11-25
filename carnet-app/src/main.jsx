@@ -8,3 +8,6 @@ registerSW({ immediate: true });
 navigator.storage?.persist?.().catch(() => {});
 
 createRoot(document.getElementById('root')).render(<App />);
+
+// The old map cache could hold an out-of-date tile index (blank map); it's replaced by map-index/map-tiles.
+try { globalThis.caches?.delete('map'); } catch {}

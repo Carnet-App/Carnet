@@ -4,7 +4,7 @@ import { upsert, remove, uid, useStore } from '../lib/store';
 import { getMe } from '../lib/me';
 import { fileUrl } from '../lib/files';
 import { useCityPlaces } from '../lib/hooks';
-import { CATS, cat, findVenue, guessCategory, walkMin, stayFor, todayISO, api, nameOf } from '../lib/util';
+import { CATS, cat, findVenue, guessCategory, walkMin, stayFor, todayISO, api, nameOf, useLocation, distM } from '../lib/util';
 import ItemEditor from './ItemEditor';
 import Capture from './Capture';
 const MapView = lazy(() => import('./MapView'));
@@ -36,14 +36,26 @@ export default function Places({ t, me, city, onBack, open }) {
   const home = t ? stayFor(t.stays, todayISO()) : null;
   const onTrip = useMemo(() => new Map((t?.items || []).filter((i) => i.place_id).map((i) => [i.place_id, i])), [t?.items]);
 
+  const [within, setWithinState] = useState(() => { try { return +localStorage.getItem('carnet.placesWithin') || 0; } catch { return 0; } });
+  const setWithin = (v) => { setWithinState(v); try { localStorage.setItem('carnet.placesWithin', String(v)); } catch {} };
+  const here = useLocation();
+  // Walking times from you when you're in town; otherwise from where you're staying.
+  const mid = useMemo(() => { const v = all.filter((p) => p.lat != null); if (!v.length) return null; const m = (k) => v.map((p) => p[k]).sort((a, b) => a - b)[v.length >> 1]; return { lat: m('lat'), lng: m('lng') }; }, [all]);
+  const inTown = (x) => x && (!mid || distM(mid, x) < 30000);
+  const from = inTown(here) ? here : inTown(home) ? home : null;
   // Name the stay ("Hôtel Jules") rather than calling it home; long names → "your stay".
-  const stayLabel = home?.name && home.name.length <= 24 ? home.name : 'your stay';
-  const list = all
+  const stayLabel = from === here ? 'you' : home?.name && home.name.length <= 24 ? home.name : 'your stay';
+  const myId = getMe().id;
+  const mine = (p) => !p.owner || !myId || p.owner === myId;
+  const others = all.some((p) => !mine(p));
+  const walked = all.map((p) => ({ ...p, walk: walkMin(from, p) }));
+  const list = walked
     .filter((p) => c === 'all' || p.category === c)
-    .filter((p) => filter === 'all' || (filter === 'ig' ? p.source === 'instagram' : filter === 'new' ? !p.visited : filter === 'check' ? p.needs_check : true))
-    .map((p) => ({ ...p, walk: walkMin(home, p) }))
+    .filter((p) => filter === 'all' || (filter === 'ig' ? p.source === 'instagram' : filter === 'new' ? !p.visited : filter === 'check' ? p.needs_check : filter === 'mine' ? mine(p) : filter === 'crew' ? !mine(p) : true))
+    .filter((p) => !within || !from || (p.walk != null && p.walk <= within))
     .sort((a, b) => (b.needs_check ? 1 : 0) - (a.needs_check ? 1 : 0) || (a.walk ?? 9e9) - (b.walk ?? 9e9) || a.name.localeCompare(b.name));
   const checks = all.filter((p) => p.needs_check).length;
+  const count = (m) => walked.filter((p) => p.walk != null && p.walk <= m && (c === 'all' || p.category === c)).length;
 
   return (
     <div className="page">
@@ -65,10 +77,17 @@ export default function Places({ t, me, city, onBack, open }) {
         ))}
       </div>
       <div className="chips">
-        {[['all', 'Everything'], ['new', 'Not been yet'], ['ig', 'From Instagram'], ...(checks ? [['check', `To check (${checks})`]] : [])].map(([k, l]) => (
+        {[['all', 'Everything'], ['new', 'Not been yet'], ...(others ? [['mine', 'Just mine'], ['crew', 'From the crew']] : []), ['ig', 'From Instagram'], ...(checks ? [['check', `To check (${checks})`]] : [])].map(([k, l]) => (
           <button key={k} className={'chip' + (filter === k ? ' on' : '')} style={{ fontSize: 12 }} onClick={() => setFilter(k)}>{l}</button>
         ))}
       </div>
+      {from && (
+        <div className="chips">
+          {[[0, 'Any distance'], [10, '10 min walk'], [20, '20 min'], [30, '30 min']].map(([m, l]) => (
+            <button key={m} className={'chip' + (within === m ? ' on' : '')} style={{ fontSize: 12 }} onClick={() => setWithin(m)}>{l}{m ? ` (${count(m)})` : ''}</button>
+          ))}
+        </div>
+      )}
       <div className="col">
         {list.map((p) => {
           const it = onTrip.get(p.id);
@@ -82,7 +101,7 @@ export default function Places({ t, me, city, onBack, open }) {
                   <div className="n">{p.name}</div>
                   <div className="row" style={{ gap: 6, marginTop: 3 }}>
                     <span className="pill" style={{ background: p.visited ? '#E1F0E8' : s[1], color: p.visited ? '#24563F' : s[2] }}>{p.visited ? 'Visited' : s[0]}</span>
-                    <span className="s">{p.walk != null ? `${p.walk} min walk from ${stayLabel}` : p.address || ''}</span>
+                    <span className="s">{p.walk != null ? `${p.walk} min walk from ${stayLabel}` : p.address || ''}{!mine(p) && onTrip.get(p.id)?.created_by_email ? ` · ${nameOf(t.members, onTrip.get(p.id).created_by_email)}` : ''}</span>
                   </div>
                 </div>
               </button>

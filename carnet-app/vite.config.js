@@ -42,10 +42,17 @@ export default defineConfig({
             options: { cacheName: 'second-reader', expiration: { maxEntries: 10 } },
           },
           {
-            // Map tiles, styles and fonts you've already looked at.
+            // The map's style and its tile index name a dated tile set that the map service replaces
+            // every week or so and then deletes: always ask for the current one, cached copy offline.
+            urlPattern: ({ url }) => url.hostname === 'tiles.openfreemap.org' && !/\.(pbf|png|json)$/.test(url.pathname) && !url.pathname.startsWith('/fonts/'),
+            handler: 'NetworkFirst',
+            options: { cacheName: 'map-index', networkTimeoutSeconds: 4, expiration: { maxEntries: 20 } },
+          },
+          {
+            // Tiles, fonts and icons never change at a given address: keep the ones you've looked at.
             urlPattern: ({ url }) => url.hostname === 'tiles.openfreemap.org',
             handler: 'CacheFirst',
-            options: { cacheName: 'map', expiration: { maxEntries: 3000, maxAgeSeconds: 60 * 60 * 24 * 30 } },
+            options: { cacheName: 'map-tiles', expiration: { maxEntries: 3000, maxAgeSeconds: 60 * 60 * 24 * 30 } },
           },
           {
             urlPattern: ({ url }) => url.pathname === '/api/og' || url.pathname === '/api/geo',
