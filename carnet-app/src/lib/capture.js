@@ -103,13 +103,79 @@ function signature(c) {
 }
 const diff = (a, b) => a.reduce((s, v, i) => s + Math.abs(v - b[i]), 0) / a.length;
 
-export function thumbBlob(canvas, w = 640) {
+export function thumbBlob(canvas, w = 640, box = null) {
+  const y0 = box ? box.y0 : 0, sh = box ? box.y1 - box.y0 : canvas.height;
   const s = Math.min(1, w / canvas.width);
   const c = document.createElement('canvas');
   c.width = Math.round(canvas.width * s);
-  c.height = Math.round(canvas.height * s);
-  c.getContext('2d').drawImage(canvas, 0, 0, c.width, c.height);
+  c.height = Math.round(sh * s);
+  c.getContext('2d').drawImage(canvas, 0, y0, canvas.width, sh, 0, 0, c.width, c.height);
   return new Promise((r) => c.toBlob(r, 'image/jpeg', 0.82));
+}
+
+// ── Social post screenshots ───────────────────────────────────────────
+// Instagram / TikTok / Threads posts stack: header · photo · action bar (counts) · caption.
+// The caption is the most trustworthy text; text laid over the photo comes second;
+// the photo itself is the place's picture, not something to read words out of.
+export function postLayout(lines, height) {
+  if (!lines?.length) return null;
+  const counts = (t) => (t.match(/(?:^|\s)\(?\d[\d.,]*\s?[kKmM]?(?=\s|$)/g) || []).length;
+  const bar = lines.find((l) => l.y > height * 0.3 && l.y < height * 0.97 && counts(l.text) >= 3 && l.text.length < 70);
+  if (!bar) return null;
+  const header = lines.filter((l) => l.y > height * 0.03 && l.y < height * 0.16 && l.conf > 60).pop();
+  const y0 = header ? Math.round(header.y + header.h + height * 0.01) : Math.round(height * 0.1);
+  const y1 = Math.round(bar.y - height * 0.005);
+  if (y1 - y0 < height * 0.2) return null;
+  const caption = [];
+  let last = bar.y + bar.h;
+  for (const l of [...lines].sort((a, b) => a.y - b.y)) {
+    if (l.y <= bar.y + bar.h / 2) continue;
+    if (caption.length && l.y - last > height * 0.05) break;
+    if (/^(follow|suggested|more posts)\b/i.test(l.text)) break;
+    caption.push(l);
+    last = l.y + l.h;
+    if (/\b(ago|il y a)\b|^\d+\s?[smhdw]$/i.test(l.text) || (/^\d{1,2}\s/.test(l.text) && MONTH.test(l.text))) break; // the date ends a caption
+  }
+  return { media: { y0, y1 }, caption: caption.map((l) => l.text).join('\n') };
+}
+
+// Words laid over a photo are usually white or near-white: keep only those pixels, enlarged,
+// so the reader isn't looking for letters in the food.
+export async function readOverlay(canvas, box) {
+  const sh = box.y1 - box.y0;
+  const s = Math.min(2, 2000 / canvas.width);
+  const c = document.createElement('canvas');
+  c.width = Math.round(canvas.width * s);
+  c.height = Math.round(sh * s);
+  const g = c.getContext('2d', { willReadFrequently: true });
+  g.drawImage(canvas, 0, box.y0, canvas.width, sh, 0, 0, c.width, c.height);
+  const img = g.getImageData(0, 0, c.width, c.height);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const lo = Math.min(d[i], d[i + 1], d[i + 2]), hi = Math.max(d[i], d[i + 1], d[i + 2]);
+    const ink = lo > 205 && hi - lo < 40;
+    d[i] = d[i + 1] = d[i + 2] = ink ? 0 : 255;
+  }
+  g.putImageData(img, 0, 0);
+  const { lines } = await readText(c);
+  return lines.filter((l) => l.conf > 75 && /\p{L}{3,}/u.test(l.text)).map((l) => l.text.replace(/^[^\p{L}\p{N}@#📍]+/u, '')).join('\n');
+}
+
+// Caption first, then the words on the photo, then (only if both are empty) the rest of the screen.
+export function zonedCandidates(caption, overlay, text) {
+  const tag = (cs, where) => cs.map((c) => ({ ...c, why: `${where} · ${c.why}` }));
+  const cap = tag(venueCandidates(caption), 'caption').filter((c) => c.weight >= 2);
+  if (cap.some((c) => c.weight >= 4)) return cap;
+  // Overlay text is short and clean: "ROJO, Paris" → also try what comes before the comma.
+  const ovText = [overlay, ...overlay.split('\n').map((l) => l.split(/[,|–—]/)[0])].join('\n');
+  const ov = tag(venueCandidates(ovText), 'on the photo').map((c) => ({ ...c, weight: Math.max(c.weight, 4) }));
+  const both = [...cap, ...ov];
+  return both.length ? both : venueCandidates(text);
+}
+
+// "hidden bar in Le Marais" → where to look and what kind of place.
+export function typeHint(text) {
+  return text.match(/\b(wine bar|cocktail bar|bar|restaurant|bistro|brasserie|caf[ée]|coffee|bakery|boulangerie|club|gallery|museum|market|rooftop)\b/i)?.[1] || null;
 }
 
 // ── Understanding what came in ─────────────────────────────────────────
@@ -233,6 +299,9 @@ export function venueCandidates(text, lines = null, height = 1) {
 }
 
 export function areaHint(text) {
-  const m = text.match(/\b(\d{1,2})(?:e|ème|er|th)\b/);
-  return m ? m[0] : null;
+  const arr = text.match(/\b(\d{1,2})(?:e|ème|er|th)\b/);
+  if (arr) return arr[0];
+  // "in Le Marais", "in Pigalle", "à Belleville"
+  const m = text.match(/\b(?:in|à|dans)\s+((?:le|la|les|the)\s+)?([A-ZÀ-Ý][\p{L}'-]+(?:\s+[A-ZÀ-Ý][\p{L}'-]+)?)/u);
+  return m && !/^(Paris|Berlin|Barcelona|London|Instagram)$/i.test(m[2]) ? `${m[1] || ''}${m[2]}`.trim() : null;
 }

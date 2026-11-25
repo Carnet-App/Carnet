@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
-import { readImage, readVideo, looksLikeTicket, parseTicket, venueCandidates, areaHint, thumbBlob } from '../lib/capture';
+import { readImage, readVideo, looksLikeTicket, parseTicket, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, zonedCandidates, typeHint } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel } from '../lib/util';
 import ItemEditor from './ItemEditor';
@@ -30,7 +30,16 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       setProgress(isVideo ? 'Watching the recording for names on screen…' : 'Reading the image on your phone…');
       const r = isVideo ? await readVideo(file, (p) => setProgress(`Watching the recording… ${Math.round(p * 100)}%`)) : await readImage(file);
       const thumb = r.canvas ? await thumbBlob(r.canvas) : null;
-      await understand({ text: r.text, lines: r.lines, height: r.height, qr: r.qr, thumb, source: /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
+      // A post screenshot: read the caption first, the words on the photo second,
+      // and keep the photo itself (not the whole screen) as the place's picture.
+      const post = !isVideo && r.canvas ? postLayout(r.lines, r.height) : null;
+      let overlay = '', photo = null;
+      if (post) {
+        setProgress('Reading the caption and the photo…');
+        overlay = await readOverlay(r.canvas, post.media).catch(() => '');
+        photo = await thumbBlob(r.canvas, 900, post.media);
+      }
+      await understand({ text: r.text, lines: r.lines, height: r.height, qr: r.qr, thumb, photo, post, overlay, source: /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
     } catch (e) {
       setProgress('Couldn’t read that one: ' + e.message);
       setStage('pick');
@@ -79,16 +88,18 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     await understand({ text, source, link });
   }
 
-  async function understand({ text, lines, height, qr, thumb, source, link: srcLink }) {
+  async function understand({ text, lines, height, qr, thumb, photo, post, overlay = '', source, link: srcLink }) {
     if (looksLikeTicket(text, qr)) {
       const tk = parseTicket(text);
       setResult({ kind: 'ticket', ...tk, qr, thumb, text });
       setStage('ticket');
       return;
     }
-    const cands = venueCandidates(text, lines, height);
+    const cands = post ? zonedCandidates(post.caption, overlay, text) : venueCandidates(text, lines, height);
     const handle = text.match(/^\s*([a-z0-9._]{3,30})\s*$/im)?.[1];
-    const area = areaHint(text);
+    const hints = [post?.caption, overlay, text].filter(Boolean).join('\n');
+    const area = areaHint(hints);
+    const kind = typeHint([post?.caption, overlay].filter(Boolean).join('\n'));
     setProgress(navigator.onLine ? 'Checking those names on the map…' : 'Offline — these will be checked when you have signal.');
     const venues = [];
     for (const c of cands.slice(0, 6)) {
@@ -105,7 +116,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
           continue;
         }
       }
-      if (navigator.onLine) matches = await findVenue(`${c.name} ${area || ''} ${city}`.trim(), near, c.type).catch(() => []);
+      if (navigator.onLine) matches = await findVenue(`${c.name} ${area || ''} ${city}`.trim(), near, c.type || kind).catch(() => []);
       const scored = matches
         .map((m) => ({ ...m, sim: similarity(c.name, m.name), far: near && distM(near, m) > 25000 }))
         .filter((m) => !m.far && !/^(city|town|village|country|state|county|administrative|region|province|postcode|suburb|neighbourhood|quarter|district|locality|political)$/.test(m.osm_value || ''))
@@ -124,7 +135,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       venues.filter((v) => v.sure).forEach((v) => { const c = v.options[0]?.city; if (c) counts[c] = (counts[c] || 0) + 1; });
       guessCity = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
     }
-    setResult({ kind: 'venues', venues, thumb, source, handle, link: srcLink, city: guessCity, collection: cands.length >= 3 ? '' : null });
+    setResult({ kind: 'venues', venues, thumb: photo || thumb, source, handle, link: srcLink, city: guessCity, collection: cands.length >= 3 ? '' : null });
     setStage('venues');
   }
 
