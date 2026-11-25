@@ -3,6 +3,8 @@ import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
 import { readImage, readVideo, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
 import { storeFile } from '../lib/files';
+import { saveInspection, compactLines } from '../lib/inspect';
+import InspectPanel from './InspectPanel';
 import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS, norm } from '../lib/util';
 import ItemEditor from './ItemEditor';
 import { AddPlace } from './Places';
@@ -31,6 +33,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     const pages = [];
     try {
       for (const [i, file] of files.entries()) {
+        const t0 = performance.now();
         const isVideo = file.type.startsWith('video');
         const of = files.length > 1 ? ` (${i + 1} of ${files.length})` : '';
         setProgress(isVideo ? 'Watching the recording for names on screen…' : `Reading the image${of}…`);
@@ -48,7 +51,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         }
         const handle = post?.handle || (post?.caption || '').match(/^\s*([a-z0-9._]{3,30})\b/m)?.[1];
         const pic = notTheAccount(overlayCandidates(overlay.lines, { handle }), handle);
-        pages.push({ ...r, thumb, photo: photo || thumb, post, first, pic, overlay: overlay.text, handle, isVideo,
+        pages.push({ ...r, thumb, photo: photo || thumb, post, first, pic, overlay: overlay.text, overlayLines: overlay.lines, handle, isVideo, ms: performance.now() - t0, file: file.name,
           source: post ? 'instagram' : /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
       }
     } catch (e) {
@@ -103,6 +106,14 @@ export default function Capture({ t, me, onClose, defaultCity }) {
 
   async function understand(pages) {
     const one = pages[0];
+    const started = performance.now();
+    // Inspector record (local only): what was read, what was proposed, what the map said.
+    const log = {
+      kind: 'travel',
+      pages: pages.map((p) => ({ file: p.file, ms: Math.round(p.ms || 0), source: p.source, layout: p.post ? { media: p.post.media, handle: p.post.handle, caption: p.post.caption } : null,
+        lines: compactLines(p.lines), overlay: compactLines(p.overlayLines), first: p.first, photoText: p.pic })),
+      lookups: [],
+    };
     if (pages.length === 1 && looksLikeTicket(one.text, one.qr)) {
       const tk = parseTicket(one.text);
       setResult({ kind: 'ticket', ...tk, qr: one.qr, thumb: one.thumb, text: one.text });
@@ -171,6 +182,10 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         .sort((a, b) => b.sim - a.sim);
       const best = scored[0];
       const sure = best && best.sim >= 0.8 && (c.weight >= 3 || best.sim >= 0.95);
+      log.lookups.push({ name: c.name, weight: c.weight, why: c.why, hint: c.hint || null, online: navigator.onLine,
+        results: matches.map((m) => ({ name: m.name, osm: m.osm_value || null, sim: Math.round(similarity(c.name, m.name) * 100) / 100 })),
+        kept: scored.slice(0, 3).map((m) => ({ name: m.name, sim: Math.round(m.sim * 100) / 100 })), sure: !!sure,
+        decision: !scored.length && c.weight < 4 ? 'dropped: weak guess, no map match' : sure ? 'matched' : scored.length ? 'asked' : 'kept without match' });
       if (!scored.length && c.weight < 4) continue; // weak guess with no match: don't bother asking
       venues.push({ cand: c, options: scored.slice(0, 3), pick: sure ? 0 : null, keep: sure, sure, photo });
     }
@@ -181,7 +196,10 @@ export default function Capture({ t, me, onClose, defaultCity }) {
       venues.filter((v) => v.sure).forEach((v) => { const c = v.options[0]?.city; if (c) counts[c] = (counts[c] || 0) + 1; });
       guessCity = Object.entries(counts).sort((a, b) => b[1] - a[1])[0]?.[0] || '';
     }
-    setResult({ kind: 'venues', venues, thumb: one.photo || one.thumb, source: one.source, handle: one.handle, link: one.link, city: guessCity, collection: venues.length >= 3 ? '' : null, many: pages.length > 1 || venues.length > 1 });
+    log.totalMs = pages.reduce((a, p) => a + (p.ms || 0), 0) + (performance.now() - started);
+    log.proposed = venues.map((v) => ({ name: v.cand.name || null, nameless: !!v.nameless, sure: !!v.sure, why: v.cand.why }));
+    saveInspection(log);
+    setResult({ kind: 'venues', venues, thumb: one.photo || one.thumb, source: one.source, handle: one.handle, link: one.link, city: guessCity, collection: venues.length >= 3 ? '' : null, many: pages.length > 1 || venues.length > 1, inspect: log });
     setStage('venues');
   }
 
@@ -442,6 +460,7 @@ function VenueReview({ t, r, setR, onDone }) {
         </label>
       )}
       <button className="btn block" disabled={!chosen.length || !city.trim()} onClick={save}>Save {chosen.length} place{chosen.length === 1 ? '' : 's'}</button>
+      <InspectPanel data={r.inspect} />
     </>
   );
 }

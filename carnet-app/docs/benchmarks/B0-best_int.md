@@ -1,0 +1,36 @@
+### B0-best_int — 2026-11-25 01:45 UTC
+
+Worker tesseract.js 7.0.0 · core 7.0.0 (LSTM-only SIMD build, as Safari loads) · model @tesseract.js-data 4.0.0_best_int · Node harness, warm session (see note) · browser numbers to follow on device
+
+**Travel (13 screenshots, 12 labelled places, offline extraction)**
+
+| Measure | Result | 95% interval |
+| --- | --- | --- |
+| Recall: labelled places proposed | 6/12 (50%) | 25–75% |
+| of which exact spelling | 4/12 | |
+| Precision: proposals that are real places | 6/7 (86%) | 49–97% |
+| Wrong proposals | 1 | |
+| Proposals on the no-place slide | 0 | |
+| “Type the name” cards | 4 | |
+| Time per screenshot, p50 / p95 | 3387 / 4531 ms | |
+
+| Text style | Key texts | Mean character error rate | Read exactly |
+| --- | --- | --- | --- |
+| printed | 5 | 0% | 5/5 |
+| overlay | 3 | 17% | 2/3 |
+| stylised | 11 | 17% | 6/11 |
+| handwritten | 7 | 39% | 1/7 |
+
+**Receipts (12 photos)**
+
+| Measure | Result |
+| --- | --- |
+| Item amounts found | 27/59 (46%) |
+| Extra amounts that aren't items | 2 |
+| Printed total read correctly | 3/7 |
+| “Adds up” shown | 7, of which wrong or unverifiable 4 |
+| Amounts proposed on the parking notice | 0 |
+| Time per receipt, p50 / p95 | 10529 / 26092 ms |
+
+Peak process memory 580 MB (Node; not representative of Safari).
+**Note — order-dependent results (new defect, found during Phase 0):** the shared OCR worker starts in page mode 6 and is switched to mode 3 by the first photo-text or receipt read, so the first screenshot of a session is read differently from every later one (s95-1 reads "Early June" first, "Early Tune" after). These figures are for a warm session. Fix: Phase 1, explicit parameter reset per read.

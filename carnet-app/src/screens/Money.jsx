@@ -7,6 +7,8 @@ import { loadImage, toCanvas, readReceipt, thumbBlob } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { money, nameOf } from '../lib/util';
 import { notify } from '../lib/push';
+import { saveInspection } from '../lib/inspect';
+import InspectPanel from './InspectPanel';
 
 export default function Money({ t, me }) {
   const { members, expenses, settlements, trip } = t;
@@ -136,16 +138,21 @@ function ReceiptSplit({ t, me, onClose }) {
   const [payer, setPayer] = useState(me);
   const [pct, setPct] = useState(() => Object.fromEntries(emails.map((e) => [e, Math.round(100 / emails.length)])));
   const [thumb, setThumb] = useState(null);
+  const [inspect, setInspect] = useState(null);
 
   async function read(file) {
     if (!file) return;
     setBusy('Reading the receipt on your phone…');
     try {
+      const t0 = performance.now();
       const { img } = await loadImage(file);
       const photo = toCanvas(img, 2400);
       // Cut out the paper, turn it upright, even out the light, read it row by row.
       const res = await readReceipt(photo, setBusy);
       const parsed = parseReceipt(res.text);
+      const log = { kind: 'receipt', totalMs: performance.now() - t0, size: [photo.width, photo.height], angle: res.angle, ocrConfidence: Math.round(res.conf), text: res.text, parsed };
+      saveInspection(log);
+      setInspect(log);
       setThumb(await thumbBlob(photo, 900));
       setR(parsed);
       setLines(parsed.lines.filter((l) => !l.service).map((l) => ({ ...l, who: [...emails] })));
@@ -253,6 +260,7 @@ function ReceiptSplit({ t, me, onClose }) {
             </div>
             <button className="btn gold block" disabled={unassigned || !result.total} onClick={submit}>{unassigned ? 'Give every line a name first' : 'Submit to trip expenses →'}</button>
           </div>
+          <InspectPanel data={inspect} />
         </>
       )}
     </Sheet>

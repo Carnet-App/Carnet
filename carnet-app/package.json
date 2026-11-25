@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "node scripts/copy-ocr.js && vite build",
     "preview": "vite preview",
-    "deploy": "npm run build && wrangler deploy"
+    "deploy": "npm run build && wrangler deploy",
+    "test": "node --import ./tests/net-guard.mjs --test 'tests/unit/*.test.mjs'",
+    "bench": "node --require ./tests/harness/core-pin.cjs tests/bench/run.mjs"
   },
   "dependencies": {
     "@pushforge/builder": "^2.0.5",
@@ -29,5 +31,8 @@
     "vite-plugin-pwa": "^2.0.0",
     "workbox-window": "^7.4.1",
     "wrangler": "^4.168.0"
+  },
+  "optionalDependencies": {
+    "canvas": "^3.2.3"
   }
 }

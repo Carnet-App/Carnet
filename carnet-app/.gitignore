@@ -3,3 +3,6 @@ dist
 public/ocr
 .wrangler
 .DS_Store
+tests/.cache
+tests/fixtures/private
+*.private.json
