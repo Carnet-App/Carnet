@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, lazy, Suspense } from 'react';
 import { Icon, Sheet, CatTag, StatusPill } from '../ui';
 import { upsert, remove, uid, useStore } from '../lib/store';
 import { getMe } from '../lib/me';
+import { usePlaceRatings, useAllRatings, mineOf, tally, rate } from '../lib/ratings';
 import { fileUrl } from '../lib/files';
 import { useCityPlaces } from '../lib/hooks';
 import { CATS, cat, findVenue, guessCategory, walkMin, stayFor, todayISO, api, nameOf, useLocation, distM } from '../lib/util';
@@ -46,12 +47,14 @@ export default function Places({ t, me, city, onBack, open }) {
   // Name the stay ("Hôtel Jules") rather than calling it home; long names → "your stay".
   const stayLabel = from === here ? 'you' : home?.name && home.name.length <= 24 ? home.name : 'your stay';
   const myId = getMe().id;
+  const rated = useAllRatings();
+  const been = (p) => { const m = mineOf(rated.get(p.id)); return m ? m.visited : !!p.visited; };
   const mine = (p) => !p.owner || !myId || p.owner === myId;
   const others = all.some((p) => !mine(p));
   const walked = all.map((p) => ({ ...p, walk: walkMin(from, p) }));
   const list = walked
     .filter((p) => c === 'all' || p.category === c)
-    .filter((p) => filter === 'all' || (filter === 'ig' ? p.source === 'instagram' : filter === 'new' ? !p.visited : filter === 'check' ? p.needs_check : filter === 'mine' ? mine(p) : filter === 'crew' ? !mine(p) : true))
+    .filter((p) => filter === 'all' || (filter === 'ig' ? p.source === 'instagram' : filter === 'new' ? !been(p) : filter === 'liked' ? tally(rated.get(p.id)).up > 0 : filter === 'check' ? p.needs_check : filter === 'mine' ? mine(p) : filter === 'crew' ? !mine(p) : true))
     .filter((p) => !within || !from || (p.walk != null && p.walk <= within))
     .sort((a, b) => (b.needs_check ? 1 : 0) - (a.needs_check ? 1 : 0) || (a.walk ?? 9e9) - (b.walk ?? 9e9) || a.name.localeCompare(b.name));
   const checks = all.filter((p) => p.needs_check).length;
@@ -77,7 +80,7 @@ export default function Places({ t, me, city, onBack, open }) {
         ))}
       </div>
       <div className="chips">
-        {[['all', 'Everything'], ['new', 'Not been yet'], ...(others ? [['mine', 'Just mine'], ['crew', 'From the crew']] : []), ['ig', 'From Instagram'], ...(checks ? [['check', `To check (${checks})`]] : [])].map(([k, l]) => (
+        {[['all', 'Everything'], ['new', 'Not been yet'], ...(others ? [['mine', 'Just mine'], ['crew', 'From the crew']] : []), ...([...rated.values()].some((l) => tally(l).up) ? [['liked', 'Liked']] : []), ['ig', 'From Instagram'], ...(checks ? [['check', `To check (${checks})`]] : [])].map(([k, l]) => (
           <button key={k} className={'chip' + (filter === k ? ' on' : '')} style={{ fontSize: 12 }} onClick={() => setFilter(k)}>{l}</button>
         ))}
       </div>
@@ -100,7 +103,8 @@ export default function Places({ t, me, city, onBack, open }) {
                   <CatTag c={p.category} extra={p.needs_check ? 'check this one' : p.collection || ''} />
                   <div className="n">{p.name}</div>
                   <div className="row" style={{ gap: 6, marginTop: 3 }}>
-                    <span className="pill" style={{ background: p.visited ? '#E1F0E8' : s[1], color: p.visited ? '#24563F' : s[2] }}>{p.visited ? 'Visited' : s[0]}</span>
+                    <span className="pill" style={{ background: been(p) ? '#E1F0E8' : s[1], color: been(p) ? '#24563F' : s[2] }}>{been(p) ? 'Visited' : s[0]}</span>
+                    <Votes list={rated.get(p.id)} />
                     <span className="s">{p.walk != null ? `${p.walk} min walk from ${stayLabel}` : p.address || ''}{!mine(p) && onTrip.get(p.id)?.created_by_email ? ` · ${nameOf(t.members, onTrip.get(p.id).created_by_email)}` : ''}</span>
                   </div>
                 </div>
@@ -114,7 +118,7 @@ export default function Places({ t, me, city, onBack, open }) {
         {!list.length && <div className="empty">Nothing here yet. Send in a screenshot or Instagram link with +, or add a place by name.</div>}
       </div>
 
-      {detail && <PlaceDetail p={detail} onClose={() => setDetail(null)} />}
+      {detail && <PlaceDetail p={detail} tripId={t?.trip.id} onClose={() => setDetail(null)} />}
       {adding && <AddPlace city={cityName} near={home || (t?.trip.center_lat ? { lat: t.trip.center_lat, lng: t.trip.center_lng } : null)} onClose={() => setAdding(false)} />}
       {toTrip && (
         <ItemEditor t={t} me={me} preset={{ title: toTrip.name, place_id: toTrip.id, lat: toTrip.lat, lng: toTrip.lng, address: toTrip.address, category: toTrip.category, status: 'idea', day: null }} onClose={() => setToTrip(null)} />
@@ -167,12 +171,16 @@ export function AddPlace({ city, near, onClose, onAdded }) {
   );
 }
 
-export function PlaceDetail({ p: initial, onClose }) {
+export function PlaceDetail({ p: initial, onClose, tripId }) {
   const [p, setP] = useState(initial);
   const [link, setLink] = useState(initial.link || '');
   const [matches, setMatches] = useState(null);
   const [msg, setMsg] = useState('');
-  const save = (patch) => { const n = { ...p, ...patch }; setP(n); upsert('places', { id: p.id, ...patch }); };
+  const ownsIt = !p.owner || !getMe().id || p.owner === getMe().id;
+  // Only the person who added a place can change its details (the server holds to that too).
+  const save = (patch) => { const n = { ...p, ...patch }; setP(n); if (ownsIt) upsert('places', { id: p.id, ...patch }); else setMsg('Only the person who added this place can change its details — your rating below is yours to set.'); };
+  const ratings = usePlaceRatings(p.id);
+  const trip = useStore((s) => Object.values(s.items || {}).find((i) => i.place_id === p.id)?.trip_id);
 
   async function photoFromSite() {
     if (!link) return;
@@ -212,7 +220,7 @@ export function PlaceDetail({ p: initial, onClose }) {
       <div className="chips">
         {Object.entries(CATS).map(([k, v]) => <button key={k} className={'chip' + (p.category === k ? ' on' : '')} onClick={() => save({ category: k })}>{v.label}</button>)}
       </div>
-      <label className="row" style={{ justifyContent: 'space-between', font: '500 14px var(--sans)' }}>Been here<input type="checkbox" checked={!!p.visited} onChange={(e) => save({ visited: e.target.checked })} style={{ width: 22, height: 22, accentColor: '#1E1A16' }} /></label>
+      <RatingBlock p={p} ratings={ratings} tripId={tripId || trip} />
       <label className="f">Notes<textarea className="in" defaultValue={p.notes || ''} onBlur={(e) => save({ notes: e.target.value })} /></label>
       <label className="f">Website or link
         <div className="row"><input className="in" value={link} onChange={(e) => setLink(e.target.value)} onBlur={() => link !== (p.link || '') && save({ link })} placeholder="https://" />
@@ -240,4 +248,47 @@ function AddedBy({ p }) {
   const when = p.created_at ? new Date(p.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : null;
   const from = SOURCE[p.source] || null;
   return <div className="s" style={{ textAlign: 'center' }}>Added by {who}{when ? ` · ${when}` : ''}{from ? ` · from ${from}` : ''}</div>;
+}
+
+// Thumbs counts, small: "▲ 2  ▼ 1".
+export function Votes({ list }) {
+  const { up, down } = tally(list);
+  if (!up && !down) return null;
+  return (
+    <span className="row" style={{ gap: 6, font: '600 12px var(--sans)' }}>
+      {up > 0 && <span className="row" style={{ gap: 2, color: '#24563F' }}><Icon n="up" size={13} w={2} />{up}</span>}
+      {down > 0 && <span className="row" style={{ gap: 2, color: '#A8472A' }}><Icon n="down" size={13} w={2} />{down}</span>}
+    </span>
+  );
+}
+
+// Been here? Then thumbs up or down. Yours to set; everyone else's shown underneath.
+function RatingBlock({ p, ratings, tripId }) {
+  const mine = mineOf(ratings);
+  const members = useStore((s) => s.trip_members);
+  const visited = mine ? mine.visited : !!p.visited;
+  const vote = mine?.vote || 0;
+  const others = ratings.filter((r) => r !== mine && (r.visited || r.vote));
+  const name = (e) => nameOf(Object.values(members || {}), e);
+  const thumb = (v) => {
+    const on = vote === v;
+    const col = v > 0 ? '#24563F' : '#A8472A';
+    return (
+      <button aria-pressed={on} aria-label={v > 0 ? 'Thumbs up' : 'Thumbs down'} onClick={() => rate(p, ratings, { vote: on ? 0 : v }, tripId)}
+        style={{ flex: 1, height: 46, borderRadius: 14, cursor: 'pointer', border: '1.5px solid ' + (on ? col : 'var(--line)'), background: on ? (v > 0 ? '#E1F0E8' : '#F7E9E3') : 'var(--card)', color: on ? col : 'var(--ink)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, font: '600 14px var(--sans)' }}>
+        <Icon n={v > 0 ? 'up' : 'down'} size={20} w={on ? 2.2 : 1.7} />{v > 0 ? 'Loved it' : 'Not for us'}
+      </button>
+    );
+  };
+  return (
+    <div className="col" style={{ gap: 8 }}>
+      <label className="row" style={{ justifyContent: 'space-between', font: '500 14px var(--sans)' }}>Been here
+        <input type="checkbox" checked={visited} onChange={(e) => rate(p, ratings, { visited: e.target.checked }, tripId)} style={{ width: 22, height: 22, accentColor: '#1E1A16' }} />
+      </label>
+      <div className="row" style={{ gap: 8 }}>{thumb(1)}{thumb(-1)}</div>
+      {others.length > 0 && (
+        <div className="s">{others.map((r) => `${name(r.email)} ${r.vote > 0 ? 'loved it' : r.vote < 0 ? 'wasn’t keen' : 'has been'}`).join(' · ')}</div>
+      )}
+    </div>
+  );
 }

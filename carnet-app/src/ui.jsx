@@ -2,6 +2,8 @@ import { useEffect } from 'react';
 import { cat } from './lib/util';
 
 const P = {
+  up: <><path d="M7 10v10H4V10zM7 10l4-7a2 2 0 0 1 2.6 1.9L13 9h5.4a2 2 0 0 1 2 2.3l-1.3 7A2 2 0 0 1 17.1 20H7" /></>,
+  down: <><path d="M7 14V4H4v10zM7 14l4 7a2 2 0 0 0 2.6-1.9L13 15h5.4a2 2 0 0 0 2-2.3l-1.3-7A2 2 0 0 0 17.1 4H7" /></>,
   today: <><circle cx="12" cy="12" r="8" /><path d="M12 8v4l3 2" /></>,
   plan: <><rect x="4" y="5" width="16" height="15" rx="2" /><path d="M4 10h16M9 3v4M15 3v4" /></>,
   places: <><path d="M12 21s-7-6-7-11a7 7 0 0114 0c0 5-7 11-7 11z" /><circle cx="12" cy="10" r="2.5" /></>,

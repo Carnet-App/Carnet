@@ -7,7 +7,8 @@ import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 maplibregl.setWorkerUrl(new URL(mapWorkerUrl, location.href).href);
 import { Icon, CatTag } from '../ui';
 import { cat, useLocation, stayFor, todayISO, walkMin, distM, dayLabel } from '../lib/util';
-import { PlacePhoto, PlaceDetail } from './Places';
+import { PlacePhoto, PlaceDetail, Votes } from './Places';
+import { useAllRatings } from '../lib/ratings';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/positron';
 const WALK15 = (15 * 80) / 1.3; // metres you can walk in 15 minutes
@@ -148,6 +149,7 @@ export default function MapView({ t, places, onClose, focus }) {
   }, [sel, focus]);
 
   const placeById = (id) => places.find((p) => p.id === id);
+  const rated = useAllRatings();
   const selP = (() => {
     const p = near.find((x) => x.id === sel);
     if (!p) return null;
@@ -178,7 +180,7 @@ export default function MapView({ t, places, onClose, focus }) {
                 <PlacePhoto p={selP} size={72} />
                 <div style={{ minWidth: 0, flex: 1 }}>
                   <CatTag c={selP.category} extra={selP.walk != null ? `${selP.walk} min walk` : ''} />
-                  <div className="n" style={{ fontSize: 19 }}>{selP.name}</div>
+                  <div className="row" style={{ gap: 8 }}><div className="n" style={{ fontSize: 19 }}>{selP.name}</div><Votes list={rated.get(selP.id)} /></div>
                   <div className="s" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{selP.address || ''}</div>
                   {selP.status && <div className="s" style={{ marginTop: 2 }}>On the trip · {selP.status === 'idea' ? 'idea' : selP.status}{selP.day ? ` · ${dayLabel(selP.day)}` : ''}</div>}
                 </div>
@@ -207,7 +209,7 @@ export default function MapView({ t, places, onClose, focus }) {
         </div>
         )}
       </div>
-      {detail && <PlaceDetail p={detail} onClose={() => setDetail(null)} />}
+      {detail && <PlaceDetail p={detail} tripId={t?.trip?.id} onClose={() => setDetail(null)} />}
     </div>
   );
 }

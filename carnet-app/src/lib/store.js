@@ -4,7 +4,7 @@ import { get, set } from 'idb-keyval';
 import { useSyncExternalStore } from 'react';
 import { supabase } from './supabase';
 
-export const TABLES = ['trips', 'trip_members', 'stays', 'places', 'items', 'private_notes', 'expenses', 'settlements', 'proposals'];
+export const TABLES = ['trips', 'trip_members', 'stays', 'places', 'items', 'private_notes', 'expenses', 'settlements', 'proposals', 'place_ratings'];
 
 let state = { ...Object.fromEntries(TABLES.map((t) => [t, {}])), outbox: [], failed: [], online: navigator.onLine, syncedAt: null };
 const listeners = new Set();
