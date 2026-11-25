@@ -150,7 +150,10 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     }
     setProgress(navigator.onLine ? 'Checking those names on the map…' : 'Offline — these will be checked when you have signal.');
     const venues = [];
-    for (const f of merged.slice(0, 14)) {
+    // Strongest first, so a name with its address on screenshot 13 isn't cut off by weak
+    // @mentions from the earlier ones (the cap only drops the weakest).
+    const ranked = merged.map((f, i) => ({ f, i })).sort((a, b) => (b.f.nameless ? 4 : b.f.c.weight) - (a.f.nameless ? 4 : a.f.c.weight) || a.i - b.i).slice(0, 14).sort((a, b) => a.i - b.i).map((x) => x.f);
+    for (const f of ranked) {
       const { c, photo, area, kind } = f;
       if (f.nameless) {
         venues.push({ kind, cand: c, options: [], pick: null, keep: false, sure: false, photo, nameless: true, cat: guessCategory('', `${c.note || ''} ${kind || ''}`) });
