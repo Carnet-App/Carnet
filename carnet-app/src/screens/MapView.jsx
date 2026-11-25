@@ -32,14 +32,23 @@ export default function MapView({ t, places, onClose, focus }) {
   const [detail, setDetail] = useState(null);
   const [cat_, setCat] = useState('all');
   const home = t ? stayFor(t.stays, todayISO()) : null;
-  const center = pos || home || (t?.trip.center_lat ? { lat: t.trip.center_lat, lng: t.trip.center_lng } : places.find((p) => p.lat != null));
-
-  const pins = [
+  const allPins = [
     ...places.filter((p) => p.lat != null),
     ...(t?.items || []).filter((i) => i.lat != null && !i.place_id && (i.visibility !== 'busy' || i.mine_private)).map((i) => ({ id: i.id, name: i.title, lat: i.lat, lng: i.lng, category: i.category, address: i.address })),
-  ].filter((p) => cat_ === 'all' || p.category === cat_);
-  const ref = pos || home;
-  const near = pins.map((p) => ({ ...p, walk: walkMin(ref, p), d: distM(ref, p) })).sort((a, b) => (a.d ?? 9e9) - (b.d ?? 9e9));
+  ];
+  const pins = allPins.filter((p) => cat_ === 'all' || p.category === cat_);
+  // Where the places actually are: the middle of them (median, so one stray pin can't drag it).
+  const mid = (k) => { const v = allPins.map((p) => p[k]).sort((a, b) => a - b); return v[v.length >> 1]; };
+  const hub = allPins.length ? { lat: mid('lat'), lng: mid('lng') } : t?.trip.center_lat ? { lat: t.trip.center_lat, lng: t.trip.center_lng } : null;
+  const inTown = (p) => p && (!hub || distM(hub, p) < 30000);
+  // You, or where you're staying — but only when that's in the same city as the places. On the way
+  // there (or with a stay whose address landed in the wrong town) the map stays on the city.
+  const here = inTown(pos) ? pos : null;
+  const homeOk = inTown(home) ? home : null;
+  const homeAway = home && !homeOk && allPins.length >= 3;
+  const ref = here || homeOk;
+  const near = pins.map((p) => ({ ...p, walk: walkMin(ref, p), d: distM(ref || hub, p) })).sort((a, b) => (a.d ?? 9e9) - (b.d ?? 9e9));
+  const center = here || homeOk || hub || places.find((p) => p.lat != null);
 
   useEffect(() => {
     map.current = new maplibregl.Map({
@@ -49,6 +58,14 @@ export default function MapView({ t, places, onClose, focus }) {
       zoom: center ? 13.5 : 11,
       attributionControl: { compact: true },
     });
+    // No one to centre on: frame the places themselves (the ones in town).
+    if (!here && !homeOk && allPins.length > 1) {
+      const town = allPins.filter(inTown);
+      if (town.length > 1) {
+        const lngs = town.map((p) => p.lng), lats = town.map((p) => p.lat);
+        map.current.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: { top: 150, bottom: 230, left: 40, right: 40 }, maxZoom: 15, duration: 0 });
+      }
+    }
     map.current.on('load', () => {
       const m = map.current;
       // Paper tones to match the app.
@@ -79,16 +96,16 @@ export default function MapView({ t, places, onClose, focus }) {
       el.onclick = () => setSel(p.id);
       markers.current.push(new maplibregl.Marker({ element: el }).setLngLat([p.lng, p.lat]).addTo(m));
     }
-    if (home) {
+    if (homeOk) {
       const h = document.createElement('div');
       h.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#F3EEE6" stroke-width="2"><path d="M4 11l8-7 8 7v9H4z"/></svg>';
       h.style.cssText = 'width:26px;height:26px;border-radius:8px;background:#1E1A16;display:flex;align-items:center;justify-content:center';
-      markers.current.push(new maplibregl.Marker({ element: h }).setLngLat([home.lng, home.lat]).addTo(m));
+      markers.current.push(new maplibregl.Marker({ element: h }).setLngLat([homeOk.lng, homeOk.lat]).addTo(m));
     }
-    if (pos) markers.current.push(new maplibregl.Marker({ element: dot('#1E1A16', 14) }).setLngLat([pos.lng, pos.lat]).addTo(m));
+    if (here) markers.current.push(new maplibregl.Marker({ element: dot('#1E1A16', 14) }).setLngLat([here.lng, here.lat]).addTo(m));
     const setWalk = () => m.getSource('walk')?.setData({ type: 'FeatureCollection', features: ref ? [circle(ref, WALK15)] : [] });
     m.isStyleLoaded() ? setWalk() : m.once('load', setWalk);
-  }, [pins.length, cat_, pos?.lat, pos?.lng, home?.id]);
+  }, [pins.length, cat_, here?.lat, here?.lng, homeOk?.id]);
 
   useEffect(() => {
     const p = pins.find((x) => x.id === (sel || focus));
@@ -107,6 +124,7 @@ export default function MapView({ t, places, onClose, focus }) {
             <div><div className="k amber">{t?.trip.city || places[0]?.city} · {pins.length} places</div><div className="n" style={{ fontSize: 20 }}>Map</div></div>
             <button className="icon" aria-label="Close map" onClick={onClose}><Icon n="close" size={18} /></button>
           </div>
+          {homeAway && <div className="card s" style={{ padding: '8px 12px' }}>Your stay ({home.name}) is pinned {Math.round(distM(hub, home) / 1000)} km from your places, so it’s left off the map. Check its address in the trip settings.</div>}
           <div className="chips">
             {['all', 'eat', 'drink', 'dance', 'coffee', 'explore', 'culture'].map((k) => (
               <button key={k} className={'chip' + (cat_ === k ? ' on' : '')} onClick={() => setCat(k)}>{k === 'all' ? 'All' : cat(k).label}</button>

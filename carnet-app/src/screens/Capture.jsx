@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
-import { readImage, readVideo, mapsSheet, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
+import { readImage, readVideo, placeCard, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { saveInspection, compactLines } from '../lib/inspect';
 import InspectPanel from './InspectPanel';
@@ -40,10 +40,10 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         setProgress(isVideo ? 'Watching the recording for names on screen…' : `Reading the ${/pdf/i.test(file.type) || /\.pdf$/i.test(file.name) ? 'PDF' : 'image'}${of}…`);
         const r = isVideo ? await readVideo(file, (p) => setProgress(`Watching the recording… ${Math.round(p * 100)}%`)) : await readImage(file);
         const thumb = r.canvas ? await thumbBlob(r.canvas) : null;
-        // A place's card in a map app: the name sits above its rating, and that's the whole answer.
-        const sheet = !isVideo ? mapsSheet(r.text) : null;
+        // One place's own page (a map app's card, a guide's entry): its name is the whole answer.
+        const sheet = !isVideo ? placeCard(r.text) : null;
         if (sheet) {
-          pages.push({ ...r, thumb, photo: thumb, sheet, first: [{ name: sheet.name, weight: 20, why: 'map app · place card' }], pic: [], overlay: '', overlayLines: [], isVideo, ms: performance.now() - t0, file: file.name, source: 'google' });
+          pages.push({ ...r, thumb, photo: thumb, sheet, first: [{ name: sheet.name, weight: 20, why: sheet.why }], pic: [], overlay: '', overlayLines: [], isVideo, ms: performance.now() - t0, file: file.name, source: sheet.source });
           continue;
         }
         // A post screenshot: caption first, words on the photo second, and the photo itself

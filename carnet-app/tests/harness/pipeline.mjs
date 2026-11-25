@@ -4,9 +4,9 @@
 export async function extractTravel(C, canvas) {
   const t0 = Date.now();
   const r = await C.readText(canvas);
-  const sheet = C.mapsSheet(r.text);
+  const sheet = C.placeCard(r.text);
   if (sheet) {
-    const cands = [{ name: sheet.name, weight: 20, why: 'map app · place card' }];
+    const cands = [{ name: sheet.name, weight: 20, why: sheet.why }];
     return { ms: Date.now() - t0, text: r.text, overlay: '', lines: r.lines, post: false, cands, shown: cands, nameless: 0 };
   }
   const post = C.postLayout(r.lines, r.height);

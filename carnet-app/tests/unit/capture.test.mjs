@@ -103,3 +103,14 @@ test('a Google Maps place card: the name above the rating, icon junk cut, wrappe
   assert.equal(mapsSheet('Le Syndicat A b x\n45 XkX*x (1,740) D\n341 km\nCocktail bar - €10-20\nOverview Menu Reviews').name, 'Le Syndicat');
   assert.equal(mapsSheet('Some caption about a bar\n4.7 (737)\nliked by friends'), null, 'needs the map app\'s tabs');
 });
+
+test('a guide page: the name under the type label, not the fact table or the photo credit', async () => {
+  const { guideCard, placeCard } = await import('../../src/lib/capture.js');
+  const page = (head) => `${head}\n\nDATES PUBLISHED ON 2 APRIL 2025\n\nESSENTIALS M Good vibes\n\nCRAVINGS BISTRO\nEXTRAS OPEN FOR LUNCH TERRACE\n\nPRICES €36 to €50\n\nHOURS From 12pm to 2pm SHOW\n\nThere's no plov on the menu at Mazali...`;
+  assert.deepEqual(guideCard(page('© Restaurant Mazali\nRESTAURANT\n\nMAZALI')), { name: 'Mazali', category: 'RESTAURANT' });
+  assert.equal(guideCard(page('© Maki Manoukian\nRESTAURANT\nALTRO FRENCHIE\n\nUn Frenchie en Italie')).name, 'Altro Frenchie');
+  assert.equal(guideCard(page('PRISTINE')).name, 'Pristine');
+  assert.equal(guideCard(page('ALTRO FRENCHIE\nUn Frenchie en Italie')).name, 'Altro Frenchie', 'subtitle skipped without a label too');
+  assert.equal(placeCard(page('RESTAURANT\nMAIYA')).why, 'guide page');
+  assert.equal(guideCard('PRICES €16 to €35\nsome caption'), null, 'one field is not a guide page');
+});

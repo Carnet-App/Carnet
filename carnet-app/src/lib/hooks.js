@@ -3,7 +3,7 @@ import { useStore } from './store';
 
 const vals = (o) => Object.values(o || {});
 
-export function useTrip(tripId, me) {
+export function useTrip(tripId, me, myId) {
   const s = useStore();
   return useMemo(() => {
     const trip = s.trips[tripId];
@@ -15,7 +15,8 @@ export function useTrip(tripId, me) {
       return p ? { ...it, title: p.title || it.title, notes: p.notes ?? it.notes, mine_private: true } : it;
     });
     const mine = members.find((m) => m.email?.toLowerCase() === me);
-    const admin = mine ? ['owner', 'admin'].includes(mine.role) : !trip.owner || members.length === 0;
+    // Same rule as the database (is_admin): the trip's creator, or an owner/admin in the crew list.
+    const admin = (myId && trip.owner === myId) || (mine ? ['owner', 'admin'].includes(mine.role) : !trip.owner || members.length === 0);
     return {
       trip,
       me,
@@ -30,7 +31,7 @@ export function useTrip(tripId, me) {
       settlements: by('settlements'),
       places: vals(s.places).filter((p) => p.city?.toLowerCase() === trip.city?.toLowerCase()),
     };
-  }, [s, tripId]);
+  }, [s, tripId, me, myId]);
 }
 
 export function useCityPlaces(city) {

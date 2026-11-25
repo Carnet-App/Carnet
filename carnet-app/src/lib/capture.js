@@ -1021,3 +1021,33 @@ export async function readWithPaddle(canvas, onProgress) {
     paddle.postMessage({ id, bitmap }, [bitmap]);
   });
 }
+
+// ── Guide pages (Le Fooding and the like) ─────────────────────────────
+// A type label ("RESTAURANT", "WINE BAR"), the name in big capitals, maybe a subtitle, then a
+// fact table: DATES / ESSENTIALS / CRAVINGS / EXTRAS / PRICES / HOURS. The table is what gives
+// it away; the name is the first line under the label, or the line above DATES without one.
+const GUIDE_FIELDS = /^(dates|published on|essentials|cravings|extras|prices|hours|address|price|opening hours)\b/i;
+const GUIDE_TYPES = /^(restaurant|bar|wine bar|cocktail bar|caf[ée]|coffee shop|bakery|boulangerie|p[âa]tisserie|bistro|brasserie|hotel|shop|club|canteen|cantine|street food|natural wine bar|bar [àa] vins?)$/i;
+const titleCase = (s) => (s === s.toUpperCase() && /\p{L}{3}/u.test(s) ? s.toLowerCase().replace(/(^|[\s'’-])(\p{L})/gu, (m, a, b) => a + b.toUpperCase()) : s);
+export function guideCard(text = '') {
+  const L = text.split('\n').map((s) => s.trim()).filter(Boolean);
+  const fields = new Set(L.map((l) => l.match(GUIDE_FIELDS)?.[1].toLowerCase()).filter(Boolean));
+  if (fields.size < 3) return null;
+  const first = L.findIndex((l) => GUIDE_FIELDS.test(l));
+  if (first < 1) return null;
+  const badge = L.slice(0, first).findIndex((l) => GUIDE_TYPES.test(l));
+  let name = badge >= 0 && badge + 1 < first ? L[badge + 1] : L[first - 1];
+  // A subtitle under the name ("Un Frenchie en Italie") is mixed case; the name above it is capitals.
+  if (badge < 0 && first >= 2 && L[first - 1] !== L[first - 1].toUpperCase() && L[first - 2] === L[first - 2].toUpperCase()) name = L[first - 2];
+  name = name.replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}')’]+$/gu, '');
+  if (!name || name.length < 2 || GUIDE_FIELDS.test(name) || GUIDE_TYPES.test(name)) return null;
+  return { name: titleCase(name), category: badge >= 0 ? L[badge] : null };
+}
+
+// A screenshot of one place's own page — a map app's card or a guide's entry — names exactly that place.
+export function placeCard(text = '') {
+  const m = mapsSheet(text);
+  if (m) return { ...m, why: 'map app · place card', source: 'google' };
+  const g = guideCard(text);
+  return g ? { ...g, why: 'guide page', source: 'web' } : null;
+}

@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import QRCode from 'qrcode';
 import { Sheet, CatTag } from '../ui';
 import { fileUrl } from '../lib/files';
-import { dayLabel, hm, walkMin, stayFor, todayISO, ticketsOf } from '../lib/util';
+import { dayLabel, hm, walkMin, stayFor, todayISO, ticketsOf, nameOf } from '../lib/util';
 import ItemEditor from './ItemEditor';
 
 function useQR(text) {
@@ -32,10 +32,10 @@ export default function Wallet({ t, me }) {
         <div className="k amber">{passes.length} booked · {passes.reduce((n, p) => n + ticketsOf(p).filter((k) => k.qr).length, 0)} QR codes</div>
         <h1 className="h1">Wallet</h1>
       </div>
-      {upcoming.map((p) => <Pass key={p.id} p={p} t={t} onOpen={(i = 0) => setOpen({ p, i })} onEdit={() => setEdit(p)} />)}
+      {upcoming.map((p) => <Pass key={p.id} p={p} t={t} me={me} onOpen={(i = 0) => setOpen({ p, i })} onEdit={() => setEdit(p)} />)}
       {!passes.length && <div className="empty">Send a ticket screenshot in with + and it lands here, QR code and all. Everything here works without signal.</div>}
       {past.length > 0 && <div className="k mute" style={{ marginTop: 10 }}>Done</div>}
-      {past.map((p) => <Pass key={p.id} p={p} t={t} small onOpen={(i = 0) => setOpen({ p, i })} onEdit={() => setEdit(p)} />)}
+      {past.map((p) => <Pass key={p.id} p={p} t={t} me={me} small onOpen={(i = 0) => setOpen({ p, i })} onEdit={() => setEdit(p)} />)}
       {open && <FullPass p={open.p} start={open.i} onClose={() => setOpen(null)} />}
       {edit && <ItemEditor t={t} me={me} item={edit} onClose={() => setEdit(null)} />}
     </div>
@@ -56,19 +56,21 @@ function TicketFace({ k, full }) {
 }
 
 // Several tickets on one plan: one at a time, with "2 of 3" and arrows (one per person at the door).
-function Pager({ n, i, setI, dark }) {
-  if (n < 2) return null;
+function Pager({ n, i, setI, dark, by }) {
+  if (n < 2) return by ? <div className="s" style={{ textAlign: 'center' }}>{by}</div> : null;
   const b = { border: '1px solid var(--line)', background: dark ? 'transparent' : 'var(--card)', borderRadius: 999, width: 38, height: 32, cursor: 'pointer', font: '500 16px var(--sans)', color: 'var(--ink)' };
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, justifyContent: 'center' }} onClick={(e) => e.stopPropagation()}>
       <button style={{ ...b, opacity: i ? 1 : 0.35 }} disabled={!i} onClick={() => setI(i - 1)} aria-label="Previous ticket">‹</button>
-      <span style={{ font: '600 13px var(--sans)' }}>Ticket {i + 1} of {n}</span>
+      <span style={{ font: '600 13px var(--sans)', textAlign: 'center' }}>Ticket {i + 1} of {n}{by && <span style={{ display: 'block', font: '400 12px var(--sans)', opacity: 0.7 }}>{by}</span>}</span>
       <button style={{ ...b, opacity: i < n - 1 ? 1 : 0.35 }} disabled={i >= n - 1} onClick={() => setI(i + 1)} aria-label="Next ticket">›</button>
     </div>
   );
 }
 
-function Pass({ p, t, onOpen, onEdit, small }) {
+const byLine = (k, p, t, me) => { const e = k?.by || (k && ticketsOf(p)[0] === k ? p.created_by_email : null); return e ? `Added by ${e === me ? 'you' : nameOf(t.members, e)}` : null; };
+
+function Pass({ p, t, me, onOpen, onEdit, small }) {
   const list = ticketsOf(p);
   const [i, setI] = useState(0);
   const k = list[Math.min(i, list.length - 1)];
@@ -90,7 +92,7 @@ function Pass({ p, t, onOpen, onEdit, small }) {
             <TicketFace k={k} />
             <div className="s">Tap to show full screen · works offline</div>
           </button>
-          <Pager n={list.length} i={Math.min(i, list.length - 1)} setI={setI} />
+          <Pager n={list.length} i={Math.min(i, list.length - 1)} setI={setI} by={byLine(k, p, t, me)} />
         </div>
       )}
     </div>

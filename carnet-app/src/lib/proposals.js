@@ -1,9 +1,9 @@
 // The master schedule: admins change it directly; everyone else proposes.
-import { upsert, remove, uid } from './store';
+import { upsert, remove, uid, failedJobs, dropFailed } from './store';
 import { notify } from './push';
 import { dayLabel, hm, nameOf } from './util';
 
-const FIELDS = ['title', 'category', 'day', 'start_time', 'end_time', 'status', 'place_id', 'lat', 'lng', 'address', 'booking_ref', 'qr_text', 'attachment_path', 'tickets', 'notes', 'visibility'];
+const FIELDS = ['title', 'category', 'day', 'start_time', 'end_time', 'status', 'place_id', 'lat', 'lng', 'address', 'booking_ref', 'qr_text', 'attachment_path', 'tickets', 'photos', 'notes', 'visibility'];
 const onSchedule = (r) => r && r.visibility === 'shared' && !!r.day;
 
 // Does saving this need an admin's OK?
@@ -53,6 +53,23 @@ export function decide(t, p, approve, note) {
     title: `${nameOf(t.members, t.me)} ${approve ? 'approved' : 'declined'}: ${what}`,
     body: note || (approve ? 'It’s on the schedule.' : ''),
   });
+}
+
+// Edits an admin made while the app wrongly thought they needed approval: the server refused
+// the proposal, so the change never happened. Now the app knows better, make the change itself.
+export function recoverOwnProposals(t) {
+  if (!t?.trip || !t.canEdit) return 0;
+  let n = 0;
+  for (const j of failedJobs()) {
+    const p = j.table === 'proposals' && j.op === 'upsert' ? j.row : null;
+    if (!p || p.trip_id !== t.trip.id || p.status !== 'pending' || !p.kind) continue;
+    if (p.kind === 'remove') remove('items', p.item_id);
+    else upsert('items', { ...(p.kind === 'change' ? {} : { visibility: 'shared', status: 'planned' }), ...p.payload, id: p.item_id, trip_id: p.trip_id });
+    remove('proposals', p.id);
+    n++;
+  }
+  if (n) dropFailed((j) => j.table === 'proposals' && j.row?.trip_id === t.trip.id && j.row?.status === 'pending');
+  return n;
 }
 
 export function withdraw(p) {

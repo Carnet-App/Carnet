@@ -67,6 +67,14 @@ export function upsert(table, row) {
   return state[table][full.id];
 }
 
+// Failed changes, and taking some back off the list once they've been dealt with another way.
+export const failedJobs = () => state.failed;
+export function dropFailed(pred) {
+  const n = state.failed.length;
+  state.failed = state.failed.filter((j) => !pred(j));
+  if (state.failed.length !== n) { persist(); emit(); }
+}
+
 export function remove(table, id) {
   const next = { ...state[table] };
   delete next[id];
@@ -128,11 +136,12 @@ async function send(job) {
   const row = clean(job.table, job.row);
   if (!VERSIONED.has(job.table)) {
     const res = await supabase.from(job.table).upsert(row);
-    // Before the tickets database script runs, the server doesn't know `tickets` yet: send the
-    // rest (the first ticket is in qr_text / attachment_path); the full list stays on this phone.
-    if (res.error && 'tickets' in row && /tickets/.test(res.error.message || '')) {
-      const { tickets, ...rest } = row;
-      return supabase.from(job.table).upsert(rest);
+    // Newer columns (tickets, photos) the server may not have yet, until its database script runs:
+    // send the rest; the full lists stay on this phone and go up once the column exists.
+    if (res.error && job.table === 'items') {
+      const rest = { ...row };
+      for (const k of ['tickets', 'photos']) if (k in rest && new RegExp(k).test(res.error.message || '')) delete rest[k];
+      if (Object.keys(rest).length < Object.keys(row).length) return supabase.from(job.table).upsert(rest);
     }
     return res;
   }

@@ -13,6 +13,7 @@ import Capture from './screens/Capture';
 import Crew from './screens/Crew';
 const MapView = lazy(() => import('./screens/MapView'));
 import { useTrip } from './lib/hooks';
+import { recoverOwnProposals } from './lib/proposals';
 
 const saved = (() => { try { return JSON.parse(localStorage.getItem('carnet-route')) || {}; } catch { return {}; } })();
 
@@ -50,13 +51,15 @@ export default function App() {
       {status && <div className="status" title={failed[0]?.error} onClick={() => failed.length && alert('Server said: ' + failed[failed.length - 1].error)}>{status}</div>}
       {route.view === 'home' && <Home me={me} go={go} />}
       {route.view === 'guide' && <Places city={route.city} me={me} go={go} onBack={() => go({ view: 'home' })} />}
-      {route.view === 'trip' && <TripShell route={route} go={go} me={me} setRoute={setRoute} />}
+      {route.view === 'trip' && <TripShell myId={session?.user?.id} route={route} go={go} me={me} setRoute={setRoute} />}
     </div>
   );
 }
 
-function TripShell({ route, go, me, setRoute }) {
-  const t = useTrip(route.tripId, me);
+function TripShell({ route, go, me, myId, setRoute }) {
+  const t = useTrip(route.tripId, me, myId);
+  // Changes refused as proposals while the app wrongly thought you needed approval: apply them now.
+  useEffect(() => { recoverOwnProposals(t); }, [t.canEdit, t.trip?.id]);
   if (!t.trip) return (
     <div className="page"><div className="empty">This trip isn’t on this phone yet.<br /><button className="btn" style={{ marginTop: 14 }} onClick={() => go({ view: 'home' })}>Back to trips</button></div></div>
   );

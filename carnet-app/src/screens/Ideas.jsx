@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { fileUrl } from '../lib/files';
 import { Seg } from '../ui';
 import { PlacePhoto } from './Places';
 import { cat, areaOf, slotOf, SLOTS, walkMin, distM, stayFor, useLocation, dayLabel } from '../lib/util';
@@ -66,7 +67,7 @@ function Row({ r, first, day, sort, onOpen }) {
   return (
     <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '9px 12px', borderTop: first ? 0 : '1px solid var(--line)' }}>
       <button onClick={() => onOpen(it)} style={{ display: 'flex', alignItems: 'center', gap: 12, flex: 1, minWidth: 0, background: 'none', border: 0, padding: 0, textAlign: 'left', cursor: 'pointer', color: 'inherit' }}>
-        {p ? <PlacePhoto p={p} size={44} /> : <span className="thumb" style={{ width: 44, height: 44, background: c.bg, color: c.color, display: 'grid', placeItems: 'center', font: '500 18px var(--serif)' }}>{(it.title || '?').trim()[0]}</span>}
+        {p && (p.photo_url || p.photo_path) ? <PlacePhoto p={p} size={44} /> : it.photos?.[0]?.path ? <OwnPhoto path={it.photos[0].path} /> : p ? <PlacePhoto p={p} size={44} /> : <span className="thumb" style={{ width: 44, height: 44, background: c.bg, color: c.color, display: 'grid', placeItems: 'center', font: '500 18px var(--serif)' }}>{(it.title || '?').trim()[0]}</span>}
         <span style={{ minWidth: 0 }}>
           <div style={{ font: '500 17px/1.2 var(--serif)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{it.title}</div>
           <div className="s" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}><span style={{ color: c.color, fontWeight: 600 }}>{meta.split(' · ')[0]}</span>{meta.includes(' · ') ? ' · ' + meta.split(' · ').slice(1).join(' · ') : ''}</div>
@@ -77,4 +78,10 @@ function Row({ r, first, day, sort, onOpen }) {
       </button>
     </div>
   );
+}
+
+function OwnPhoto({ path }) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => { let on = true; fileUrl(path).then((u) => on && setSrc(u)).catch(() => {}); return () => { on = false; }; }, [path]);
+  return <span className="thumb" style={{ width: 44, height: 44, background: '#E8E1D6', display: 'block', overflow: 'hidden' }}>{src && <img src={src} alt="" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />}</span>;
 }

@@ -1,9 +1,9 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { loadImage, toCanvas, readQR, thumbBlob, isPdf, pdfTicket } from '../lib/capture';
-import { storeFile } from '../lib/files';
+import { storeFile, fileUrl } from '../lib/files';
 import { Sheet, Seg, Icon } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
-import { CATS, daysBetween, dayLabel, findVenue, guessCategory, ticketsOf, ticketFields } from '../lib/util';
+import { CATS, daysBetween, dayLabel, findVenue, guessCategory, ticketsOf, ticketFields, nameOf } from '../lib/util';
 import { needsApproval, propose, announce } from '../lib/proposals';
 
 // Add or edit something on the trip: from the guide, a search, or typed in.
@@ -16,7 +16,7 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
       notes: '', booking_ref: '', place_id: null, lat: null, lng: null, address: '',
       ...preset, ...(item || {}), ...overrides,
     };
-    return { ...b, tickets: ticketsOf(b), start_time: (b.start_time || '').slice(0, 5), end_time: (b.end_time || '').slice(0, 5) };
+    return { ...b, tickets: ticketsOf(b), photos: Array.isArray(b.photos) ? b.photos : [], start_time: (b.start_time || '').slice(0, 5), end_time: (b.end_time || '').slice(0, 5) };
   });
   const [q, setQ] = useState('');
   const [res, setRes] = useState([]);
@@ -43,7 +43,7 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
       id, trip_id: trip.id, place_id: f.place_id, category: f.category, day: f.day || null,
       start_time: f.start_time || null, end_time: f.end_time || null, visibility: f.visibility, status: f.status,
       lat: f.lat, lng: f.lng, address: f.address || null, booking_ref: f.booking_ref || null,
-      ...ticketFields(f.tickets), attachment_local: f.attachment_local,
+      ...ticketFields(f.tickets), photos: f.photos?.length ? f.photos : null, attachment_local: f.attachment_local,
     };
     const after = { ...row, title: f.title.trim(), notes: f.notes || null };
     if (needsApproval(t, item, after)) {
@@ -114,11 +114,13 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
       <label className="f">Who can see it</label>
       <Seg value={f.visibility} onChange={(v) => set('visibility', v)} options={[['shared', 'Everyone'], ['busy', 'Busy only'], ['hidden', 'Just me']]} label="Visibility" />
       <div className="s">{{ shared: 'The whole crew sees it.', busy: 'The crew sees a grey “busy” block — not what it is.', hidden: 'Only you can see it.' }[f.visibility]}</div>
-      <TicketField f={f} set={set} tripId={trip.id} />
+      <PhotoField f={f} set={set} tripId={trip.id} me={me} members={t.members} />
+      <TicketField f={f} set={set} tripId={trip.id} me={me} members={t.members} />
       {f.status === 'booked' && <label className="f">Booking ref<input className="in" value={f.booking_ref || ''} onChange={(e) => set('booking_ref', e.target.value)} /></label>}
       <label className="f">Notes<textarea className="in" value={f.notes || ''} onChange={(e) => set('notes', e.target.value)} /></label>
       {asksApproval && <div className="card dashed s">This changes the shared schedule, so it goes to {t.members.filter((m) => ['owner', 'admin'].includes(m.role)).map((m) => m.name || m.email.split('@')[0]).join(' or ') || 'the trip admin'} to approve. Ideas with no day, and your own Busy / Just-me time, go straight in.</div>}
       <button className="btn block" disabled={!f.title.trim()} onClick={save}>{asksApproval ? 'Propose' : item ? 'Save' : 'Add'}</button>
+      {item?.created_by_email && <div className="s" style={{ textAlign: 'center' }}>Added by {item.created_by_email === me ? 'you' : nameOf(t.members, item.created_by_email)}{item.created_at ? ` · ${new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}` : ''}</div>}
       {item && <button className="btn ghost block" onClick={del}>{needsApproval(t, item, null) ? 'Propose removing' : 'Remove'}</button>}
     </Sheet>
   );
@@ -126,7 +128,7 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
 
 // A ticket for this plan: a screenshot or photo of it. The QR code is read on the phone and saved,
 // so Wallet can show a crisp code offline; the image is kept too, for tickets without one.
-function TicketField({ f, set, tripId }) {
+function TicketField({ f, set, tripId, me, members }) {
   const ref = useRef();
   const [busy, setBusy] = useState('');
   const list = f.tickets || [];
@@ -144,7 +146,7 @@ function TicketField({ f, set, tripId }) {
       page = toCanvas(img, 1600);
     }
     const path = await storeFile(await thumbBlob(page, 1200), { tripId });
-    return { qr: qr || null, path };
+    return { qr: qr || null, path, by: me || null };
   }
   // Several at once: one PDF per person, or a screenshot of each ticket.
   async function add(files) {
@@ -174,7 +176,10 @@ function TicketField({ f, set, tripId }) {
         <div className="card" style={{ padding: 0 }}>
           {list.map((k, i) => (
             <div key={(k.qr || k.path) + i} className="between" style={{ padding: '10px 12px', borderTop: i ? '1px solid var(--line)' : 0 }}>
-              <div className="s" style={{ flex: 1 }}>{list.length > 1 && <b style={{ color: 'var(--ink)' }}>{i + 1}. </b>}{k.qr ? 'QR code · works offline' : 'Ticket image'}</div>
+              <div className="s" style={{ flex: 1 }}>
+                <div>{list.length > 1 && <b style={{ color: 'var(--ink)' }}>{i + 1}. </b>}{k.qr ? 'QR code · works offline' : 'Ticket image'}</div>
+                {(k.by || (i === 0 && f.created_by_email)) && <div style={{ fontSize: 12, opacity: 0.75 }}>Added by {(k.by || f.created_by_email) === me ? 'you' : nameOf(members, k.by || f.created_by_email)}</div>}
+              </div>
               {list.length > 1 && i > 0 && <button className="link" onClick={() => move(i, -1)} aria-label="Move up">↑</button>}
               <button className="link" onClick={() => { set('tickets', list.filter((_, j) => j !== i)); setBusy(''); }}>Remove</button>
             </div>
@@ -185,6 +190,60 @@ function TicketField({ f, set, tripId }) {
       <input ref={ref} type="file" accept="image/*,application/pdf,.pdf" multiple hidden onChange={(e) => { add([...(e.target.files || [])]); e.target.value = ''; }} />
       {list.length === 0 && <div className="s">Pick several at once for a ticket per person.</div>}
       {busy && <div className="s">{busy}</div>}
+    </div>
+  );
+}
+
+// Pictures of the place itself (the room, the menu, the door to look for) — not tickets. The first
+// one stands in as the plan's picture wherever the place has none.
+function useFileUrl(path) {
+  const [src, setSrc] = useState(null);
+  useEffect(() => { let on = true; path ? fileUrl(path).then((u) => on && setSrc(u)).catch(() => {}) : setSrc(null); return () => { on = false; }; }, [path]);
+  return src;
+}
+function PhotoThumb({ k, onOpen, onRemove }) {
+  const src = useFileUrl(k.path);
+  return (
+    <div style={{ position: 'relative', aspectRatio: '1', borderRadius: 12, overflow: 'hidden', background: '#E8E1D6' }}>
+      {src && <img src={src} alt="" onClick={onOpen} style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block', cursor: 'pointer' }} />}
+      <button aria-label="Remove photo" onClick={onRemove} style={{ position: 'absolute', top: 4, right: 4, width: 26, height: 26, borderRadius: 13, border: 0, background: 'rgba(30,26,22,.7)', color: '#fff', cursor: 'pointer', font: '500 15px/1 var(--sans)' }}>×</button>
+    </div>
+  );
+}
+function PhotoField({ f, set, tripId, me, members }) {
+  const ref = useRef();
+  const [busy, setBusy] = useState('');
+  const [open, setOpen] = useState(null);
+  const list = f.photos || [];
+  async function add(files) {
+    const got = [];
+    for (const [i, file] of files.entries()) {
+      setBusy(files.length > 1 ? `Adding photo ${i + 1} of ${files.length}…` : 'Adding the photo…');
+      try {
+        const { img } = await loadImage(file);
+        got.push({ path: await storeFile(await thumbBlob(toCanvas(img, 1600), 1600), { tripId }), by: me || null });
+      } catch (e) { setBusy(`Couldn’t add ${file.name}: ${e.message}`); }
+    }
+    if (got.length) { set('photos', [...list, ...got]); setBusy(''); }
+  }
+  const big = useFileUrl(open?.path);
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      <label className="f">{list.length ? `Photos · ${list.length}` : 'Photos'}</label>
+      {list.length > 0 && (
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 6 }}>
+          {list.map((k, i) => <PhotoThumb key={k.path} k={k} onOpen={() => setOpen(k)} onRemove={() => set('photos', list.filter((_, j) => j !== i))} />)}
+        </div>
+      )}
+      <button className="btn ghost block" onClick={() => ref.current?.click()}>{list.length ? '+ Add more photos' : 'Add photos of the place'}</button>
+      <input ref={ref} type="file" accept="image/*" multiple hidden onChange={(e) => { add([...(e.target.files || [])]); e.target.value = ''; }} />
+      {busy && <div className="s">{busy}</div>}
+      {open && (
+        <div onClick={() => setOpen(null)} style={{ position: 'fixed', inset: 0, zIndex: 100, background: 'rgba(20,17,14,.92)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 10, padding: 16 }}>
+          {big && <img src={big} alt="" style={{ maxWidth: '100%', maxHeight: '80vh', borderRadius: 12 }} />}
+          <div className="s" style={{ color: '#E8E1D6' }}>{open.by ? `Added by ${open.by === me ? 'you' : nameOf(members, open.by)} · ` : ''}tap to close</div>
+        </div>
+      )}
     </div>
   );
 }
