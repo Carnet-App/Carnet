@@ -1,7 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
-import { readImage, readVideo, looksLikeTicket, parseTicket, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
+import { readImage, readVideo, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
 import { storeFile } from '../lib/files';
 import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS, norm } from '../lib/util';
 import ItemEditor from './ItemEditor';
@@ -40,14 +40,14 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         // (not the whole screen) as the place's picture.
         const post = !isVideo && r.canvas ? postLayout(r.lines, r.height) : null;
         const photo = post ? await thumbBlob(r.canvas, 900, post.media) : null;
-        const first = r.lines?.length ? firstLine({ post, lines: r.lines, height: r.height, text: r.text }) : venueCandidates(r.text);
+        const first = notTheAccount(r.lines?.length ? firstLine({ post, lines: r.lines, height: r.height, text: r.text }) : venueCandidates(r.text), post?.handle);
         let overlay = { text: '', lines: [] };
         if (!isVideo && r.canvas && (post || !isStrong(first))) {
           setProgress(`${post ? 'Reading the caption and the photo' : 'Looking at text inside the pictures'}${of}…`);
           overlay = await readOverlay(r.canvas, post ? post.media : { y0: 0, y1: r.canvas.height }).catch(() => ({ text: '', lines: [] }));
         }
-        const handle = (post?.caption || r.text).match(/^\s*([a-z0-9._]{3,30})\b/m)?.[1];
-        const pic = overlayCandidates(overlay.lines, { handle });
+        const handle = post?.handle || (post?.caption || '').match(/^\s*([a-z0-9._]{3,30})\b/m)?.[1];
+        const pic = notTheAccount(overlayCandidates(overlay.lines, { handle }), handle);
         pages.push({ ...r, thumb, photo: photo || thumb, post, first, pic, overlay: overlay.text, handle, isVideo,
           source: post ? 'instagram' : /instagram|follow|reels?|liked by/i.test(r.text) ? 'instagram' : /directions/i.test(r.text) ? 'google' : 'screenshot' });
       }

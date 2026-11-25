@@ -119,24 +119,42 @@ export function thumbBlob(canvas, w = 640, box = null) {
 // the photo itself is the place's picture, not something to read words out of.
 export function postLayout(lines, height) {
   if (!lines?.length) return null;
+  // The post's header row: "service95 ✓ Follow". Its account name is the post's own handle.
+  const followRow = lines.find((l) => l.y < height * 0.3 && /\bfollow(ing)?\b/i.test(l.text));
+  let handle = followRow?.text.match(/([a-z0-9._]{3,30})\s*\S{0,3}\s*follow/i)?.[1]?.toLowerCase() || null;
   const counts = (t) => (t.match(/(?:^|\s)\(?\d[\d.,]*\s?[kKmM]?(?=\s|$)/g) || []).length;
   const bar = lines.find((l) => l.y > height * 0.3 && l.y < height * 0.97 && counts(l.text) >= 3 && l.text.length < 70);
-  if (!bar) return null;
-  const header = lines.filter((l) => l.y > height * 0.03 && l.y < height * 0.16 && l.conf > 60).pop();
+  let barTop = bar ? bar.y : null, barEnd = bar ? bar.y + bar.h / 2 : null;
+  if (!bar) {
+    // Icons misread ("Q 428K Qas V3")? Anchor on the caption instead: it starts with the account name.
+    const cap = lines.find((l) => l.y > height * 0.5 && l.conf > 85 && (handle ? l.text.toLowerCase().startsWith(handle) : /^[a-z0-9._]{3,30}\s+[\p{L}📍]/u.test(l.text)));
+    if (!cap) return null;
+    barTop = cap.y - height * 0.06;
+    barEnd = cap.y - 1;
+    handle ||= cap.text.match(/^([a-z0-9._]{3,30})/)?.[1]?.toLowerCase() || null;
+  }
+  const header = followRow || lines.filter((l) => l.y > height * 0.03 && l.y < height * 0.16 && l.conf > 60).pop();
   const y0 = header ? Math.round(header.y + header.h + height * 0.01) : Math.round(height * 0.1);
-  const y1 = Math.round(bar.y - height * 0.005);
+  const y1 = Math.round(barTop - height * 0.005);
   if (y1 - y0 < height * 0.2) return null;
   const caption = [];
-  let last = bar.y + bar.h;
+  let last = barEnd;
   for (const l of [...lines].sort((a, b) => a.y - b.y)) {
-    if (l.y <= bar.y + bar.h / 2) continue;
+    if (l.y <= barEnd) continue;
     if (caption.length && l.y - last > height * 0.05) break;
     if (/^(follow|suggested|more posts)\b/i.test(l.text)) break;
     caption.push(l);
     last = l.y + l.h;
     if (/\b(ago|il y a)\b|^\d+\s?[smhdw]$/i.test(l.text) || (/^\d{1,2}\s/.test(l.text) && MONTH.test(l.text))) break; // the date ends a caption
   }
-  return { media: { y0, y1 }, caption: caption.map((l) => l.text).join('\n') };
+  handle ||= caption[0]?.text.match(/^([a-z0-9._]{3,30})\s/)?.[1]?.toLowerCase() || null;
+  return { media: { y0, y1 }, caption: caption.map((l) => l.text).join('\n'), handle };
+}
+
+// The account's own name, "Follow" buttons and the like are never the place.
+export function notTheAccount(cands, handle) {
+  const h = handle ? squash(handle) : null;
+  return cands.filter((c) => !c.name || (!/\bfollow(ing)?\b/i.test(c.name) && !(h && h.length >= 4 && squash(c.name).includes(h))));
 }
 
 // Words laid over a photo are usually white or near-white: keep only those pixels, enlarged,
@@ -244,21 +262,30 @@ export function overlayCandidates(lines, { handle } = {}) {
       used.add(i - 1);
     }
     // "SUGAAR IS THAT DREAM MIX…": the quote names the place itself.
-    if (!name) name = sayIs(q.join(' '));
+    if (!name) name = q.map(sayIs).find(Boolean) || null;
     if (false) name = q.join(' ').match(/(?:^|[“"\s])([A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}(?:\s+[A-ZÀ-Ý][A-ZÀ-Ý'’&-]{2,}){0,3})\s+(?:IS|1S|ES|ARE|HAS)\s/u)?.[1] || null;
     out.push({ name: name || '', why: name ? 'on the photo · name above a quote' : 'on the photo · quote', weight: name ? 8 : 4, note: quote, hint: placeHint(quote) });
   }
   // "SUGAAR IS THAT DREAM MIX…" even when the opening quote mark wasn't read.
   if (!out.some((o) => o.name)) {
-    const n = sayIs(L.map((l) => l.text).join(' '));
+    const n = L.map((l) => sayIs(l.text)).find(Boolean);
     if (n) {
       const q = out.find((o) => !o.name);
       if (q) Object.assign(q, { name: n, weight: 7, why: 'on the photo · named in the quote' });
       else out.push({ name: n, why: 'on the photo · named in the quote', weight: 7, note: sentence(L.map((l) => l.text).join(' ')), hint: placeHint(L.map((l) => l.text).join(' ')) });
     }
   }
+  // A quote whose opening line wasn't read ("…SERVING UP SMALL PLATES ON RUE DE CHARONNE.”"):
+  // it's still a quote, not a name.
+  const quoted = L.filter((l) => /[“”«»]/.test(l.text));
+  if (!out.length && quoted.length) {
+    const from = L.indexOf(quoted[0]);
+    const tail = L.slice(Math.max(0, from - 3), L.indexOf(quoted[quoted.length - 1]) + 1).map((l) => l.text).join(' ');
+    out.push({ name: '', why: 'on the photo · quote', weight: 4, note: sentence(tail), hint: placeHint(tail) });
+    L.forEach((l, i) => { if (i >= from - 3 && i <= L.indexOf(quoted[quoted.length - 1])) used.add(i); });
+  }
   // A lone short line, biggest first ("VIRAGE"), when there's no quote to anchor on.
-  if (!out.some((o) => o.name)) {
+  if (!out.length) {
     const lone = L.filter((l, i) => !used.has(i) && l.text.split(/\s+/).length <= 4 && !STOP.test(l.text) && !junk(l.text) && !/[.!?]$/.test(l.text) && !/[€£$]|\d{1,2}\s?(am|pm|h)\b|midnight|sunrise/i.test(l.text) && /\p{L}{3,}/u.test(l.text))
       .sort((a, b) => b.h - a.h);
     lone.slice(0, 2).filter((l, k) => !k || l.h >= lone[0].h * 0.8).forEach((l, k) => out.push({ name: l.text, why: k ? 'on the photo' : 'on the photo · biggest text', weight: k ? 3 : 5 }));
