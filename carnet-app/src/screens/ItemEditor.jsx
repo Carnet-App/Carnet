@@ -5,6 +5,7 @@ import { Sheet, Seg, Icon } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
 import { CATS, daysBetween, dayLabel, findVenue, guessCategory, ticketsOf, ticketFields, nameOf } from '../lib/util';
 import { needsApproval, propose, announce } from '../lib/proposals';
+import { altsOf, swapIn, withoutAlt, rankLabel } from '../lib/alts';
 
 // Add or edit something on the trip: from the guide, a search, or typed in.
 export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, onClose }) {
@@ -16,7 +17,7 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
       notes: '', booking_ref: '', place_id: null, lat: null, lng: null, address: '',
       ...preset, ...(item || {}), ...overrides,
     };
-    return { ...b, tickets: ticketsOf(b), photos: Array.isArray(b.photos) ? b.photos : [], start_time: (b.start_time || '').slice(0, 5), end_time: (b.end_time || '').slice(0, 5) };
+    return { ...b, alternatives: altsOf(b), tickets: ticketsOf(b), photos: Array.isArray(b.photos) ? b.photos : [], start_time: (b.start_time || '').slice(0, 5), end_time: (b.end_time || '').slice(0, 5) };
   });
   const [q, setQ] = useState('');
   const [res, setRes] = useState([]);
@@ -43,7 +44,7 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
       id, trip_id: trip.id, place_id: f.place_id, category: f.category, day: f.day || null,
       start_time: f.start_time || null, end_time: f.end_time || null, visibility: f.visibility, status: f.status,
       lat: f.lat, lng: f.lng, address: f.address || null, booking_ref: f.booking_ref || null,
-      ...ticketFields(f.tickets), photos: f.photos?.length ? f.photos : null, attachment_local: f.attachment_local,
+      ...ticketFields(f.tickets), photos: f.photos?.length ? f.photos : null, alternatives: f.alternatives?.length ? f.alternatives : null, attachment_local: f.attachment_local,
     };
     const after = { ...row, title: f.title.trim(), notes: f.notes || null };
     if (needsApproval(t, item, after)) {
@@ -114,6 +115,22 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
       <label className="f">Who can see it</label>
       <Seg value={f.visibility} onChange={(v) => set('visibility', v)} options={[['shared', 'Everyone'], ['busy', 'Busy only'], ['hidden', 'Just me']]} label="Visibility" />
       <div className="s">{{ shared: 'The whole crew sees it.', busy: 'The crew sees a grey “busy” block — not what it is.', hidden: 'Only you can see it.' }[f.visibility]}</div>
+      {f.alternatives?.length > 0 && (
+        <div className="col" style={{ gap: 6 }}>
+          <label className="f">Backups</label>
+          <div className="card" style={{ padding: 0 }}>
+            {f.alternatives.map((a, i) => (
+              <div key={(a.place_id || a.title) + i} className="row" style={{ padding: '9px 12px', gap: 8, borderTop: i ? '1px solid var(--line)' : 0 }}>
+                <span className="s" style={{ width: 30, fontWeight: 600, color: 'var(--amber)' }}>{rankLabel(i)}</span>
+                <span className="grow" style={{ font: '400 16px var(--serif)' }}>{a.title}</span>
+                <button className="link" onClick={() => { const n = swapIn(f, i); Object.entries(n).forEach(([k, v]) => set(k, v)); }}>Swap in</button>
+                <button className="link mute" aria-label={'Remove ' + a.title} onClick={() => set('alternatives', withoutAlt(f, i).alternatives || [])}>Remove</button>
+              </div>
+            ))}
+          </div>
+          <div className="s">Swapping makes it the plan and keeps {f.title} as the first backup. Save to keep the change.</div>
+        </div>
+      )}
       <PhotoField f={f} set={set} tripId={trip.id} me={me} members={t.members} />
       <TicketField f={f} set={set} tripId={trip.id} me={me} members={t.members} />
       {f.status === 'booked' && <label className="f">Booking ref<input className="in" value={f.booking_ref || ''} onChange={(e) => set('booking_ref', e.target.value)} /></label>}

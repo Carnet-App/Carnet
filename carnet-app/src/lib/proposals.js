@@ -3,7 +3,7 @@ import { upsert, patch, remove, uid, failedJobs, dropFailed } from './store';
 import { notify } from './push';
 import { dayLabel, hm, nameOf } from './util';
 
-const FIELDS = ['title', 'category', 'day', 'start_time', 'end_time', 'status', 'place_id', 'lat', 'lng', 'address', 'booking_ref', 'qr_text', 'attachment_path', 'tickets', 'photos', 'notes', 'visibility'];
+const FIELDS = ['title', 'category', 'day', 'start_time', 'end_time', 'status', 'place_id', 'lat', 'lng', 'address', 'booking_ref', 'qr_text', 'attachment_path', 'tickets', 'photos', 'alternatives', 'notes', 'visibility'];
 const onSchedule = (r) => r && r.visibility === 'shared' && !!r.day;
 
 // Does saving this need an admin's OK?

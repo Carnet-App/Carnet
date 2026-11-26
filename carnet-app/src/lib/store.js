@@ -156,7 +156,7 @@ async function send(job) {
     // send the rest; the full lists stay on this phone and go up once the column exists.
     if (res.error && job.table === 'items') {
       const rest = { ...row };
-      for (const k of ['tickets', 'photos']) if (k in rest && new RegExp(k).test(res.error.message || '')) delete rest[k];
+      for (const k of ['tickets', 'photos', 'alternatives']) if (k in rest && new RegExp(k).test(res.error.message || '')) delete rest[k];
       if (Object.keys(rest).length < Object.keys(row).length) return supabase.from(job.table).upsert(rest);
     }
     return res;

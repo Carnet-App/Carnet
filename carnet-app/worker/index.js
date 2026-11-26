@@ -84,6 +84,25 @@ async function geo(url) {
   return json({ results }, 200, { 'cache-control': 'public, max-age=86400' });
 }
 
+// The address at a spot on the map (a pin dropped by hand). Photon's reverse lookup, free.
+async function reverse(url) {
+  const lat = +url.searchParams.get('lat'), lng = +url.searchParams.get('lng');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return json({ error: 'lat and lng' }, 400);
+  const p = new URL('https://photon.komoot.io/reverse');
+  p.searchParams.set('lat', String(lat));
+  p.searchParams.set('lon', String(lng));
+  p.searchParams.set('lang', 'en');
+  try {
+    const r = await fetch(p, { headers: { 'user-agent': UA } });
+    const pr = r.ok ? (await r.json()).features?.[0]?.properties : null;
+    if (!pr) return json({ address: null });
+    const address = [pr.housenumber, pr.street, pr.postcode, pr.city].filter(Boolean).join(' ') || pr.name || null;
+    return json({ address, name: pr.name || null }, 200, { 'cache-control': 'public, max-age=86400' });
+  } catch {
+    return json({ address: null });
+  }
+}
+
 async function google(url, env) {
   if (!env.GOOGLE_KEY) return json({ results: [], error: 'no google key' }, 404);
   const q = url.searchParams.get('q') || '';
@@ -294,6 +313,8 @@ export default {
       switch (url.pathname) {
         case '/api/geo':
           return geo(url);
+        case '/api/reverse':
+          return reverse(url);
         case '/api/maplink':
           return mapLink(url);
         case '/api/og':

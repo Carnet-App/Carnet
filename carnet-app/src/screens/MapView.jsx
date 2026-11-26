@@ -9,6 +9,7 @@ import { Icon, CatTag } from '../ui';
 import { cat, useLocation, stayFor, todayISO, walkMin, distM, dayLabel } from '../lib/util';
 import { PlacePhoto, PlaceDetail, Votes } from './Places';
 import { useAllRatings } from '../lib/ratings';
+import { getMe } from '../lib/me';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/positron';
 const WALK15 = (15 * 80) / 1.3; // metres you can walk in 15 minutes
@@ -209,7 +210,7 @@ export default function MapView({ t, places, onClose, focus }) {
         </div>
         )}
       </div>
-      {detail && <PlaceDetail p={detail} tripId={t?.trip?.id} onClose={() => setDetail(null)} />}
+      {detail && <PlaceDetail p={detail} t={t?.trip ? t : null} me={getMe().email} tripId={t?.trip?.id} onClose={() => setDetail(null)} />}
     </div>
   );
 }

@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { altsOf, rankLabel } from '../lib/alts';
 import { Icon, CatTag } from '../ui';
 import { buildDay } from '../lib/schedule';
 import { cat, hm, fromMin, dur, stayFor, tripNow, nameOf, dayLabel } from '../lib/util';
@@ -54,6 +55,7 @@ export default function DayView({ t, me, day, pos }) {
                 <>
                   <CatTag c={it.category} extra={[it.status === 'booked' && 'booked', it.status === 'idea' && 'idea', it.visibility === 'busy' && 'crew sees “busy”', it.visibility === 'hidden' && 'only you'].filter(Boolean).join(' · ')} />
                   <div className="n" style={{ color: 'var(--ink)' }}>{it.title}</div>
+                  {altsOf(it).length > 0 && <div className="s" style={{ marginTop: 2 }}>Or {altsOf(it).map((a, i) => `${rankLabel(i)}: ${a.title}`).join(' · ')}</div>}
                   {(it.end_time || it.address || r.fromYesterday) && <div className="s">{r.fromYesterday ? `from ${dayLabel(it.day, { weekday: 'short' })} ${hm(it.start_time)} · ` : ''}{it.end_time ? `until ${hm(it.end_time)}${!r.fromYesterday && span(it).overnight ? ' (next day)' : ''}` : ''}{it.end_time && it.address ? ' · ' : ''}{it.address || ''}</div>}
                 </>
               )}
