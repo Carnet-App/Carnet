@@ -170,6 +170,12 @@ begin
   return new;
 end $$;
 
+-- Newer Supabase projects run nothing that isn't granted.
+grant execute on function public.money_check_expense_shares(jsonb, bigint) to authenticated;
+grant execute on function public.money_bump_revision() to authenticated;
+grant execute on function public.money_remember_delete() to authenticated;
+grant execute on function public.money_block_resurrection() to authenticated;
+
 commit;
 
 -- ── Check ────────────────────────────────────────────────────────────
