@@ -103,7 +103,7 @@ export default function Money({ t, me }) {
           ) : (
             <button key={e.id} className="li" style={{ width: '100%', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }} onClick={() => setAdd(e)}>
               <Avatar name={nameOf(members, e.payer_email)} i={Math.max(0, members.findIndex((m) => m.email === e.payer_email))} size={26} />
-              <div className="grow"><div className="n" style={{ fontSize: 16 }}>{e.title}</div><div className="s">{name(e.payer_email)} paid · {e.method || 'evenly'}</div></div>
+              <div className="grow"><div className="n" style={{ fontSize: 16 }}>{e.title}</div><div className="s">{name(e.payer_email)} paid · {e.method || 'evenly'}{e.receipt?.item_id ? ' · from the plan' : ''}</div></div>
               <div style={{ textAlign: 'right' }}><div style={{ font: '600 13px var(--sans)' }}>{money(e.amount, e.currency)}</div><div className="s">you {money(e.shares?.[me] || 0, e.currency)}</div></div>
             </button>
           ))}

@@ -21,6 +21,7 @@ export function buildDay({ items, day, home, now, places, minGap = 45 }) {
   const isToday = now && now.day === day;
   let cursor = Math.max(9 * 60, isToday ? now.min : 0);
   let prevLoc = home;
+  let prevName = home?.name ? home.name : 'where you’re staying';
   // Last night's plans that run past midnight into this morning come first, and the morning's
   // free time starts after them.
   const yday = prevDay(day);
@@ -34,14 +35,14 @@ export function buildDay({ items, day, home, now, places, minGap = 45 }) {
     const loc = it.lat != null ? { lat: it.lat, lng: it.lng } : null;
     const travel = walkMin(prevLoc, loc);
     const freeEnd = start - (travel || 0);
-    if (freeEnd - cursor >= minGap) rows.push(gapRow(cursor, freeEnd, prevLoc, places, items));
+    if (freeEnd - cursor >= minGap) rows.push({ ...gapRow(cursor, freeEnd, prevLoc, places, items), before: prevLoc && { ...prevLoc, name: prevName }, after: loc && { ...loc, name: it.title } });
     if (rows.length && travel) rows.push({ kind: 'travel', minutes: travel, to: it });
     rows.push({ kind: 'item', item: it, start, end });
     cursor = Math.max(cursor, end);
-    if (loc) prevLoc = loc;
+    if (loc) { prevLoc = loc; prevName = it.title; }
   }
   // Free time to the end of the evening, unless the night is already taken up past midnight.
-  if (DAY - cursor >= 120) rows.push(gapRow(cursor, DAY, prevLoc, places, items, true));
+  if (DAY - cursor >= 120) rows.push({ ...gapRow(cursor, DAY, prevLoc, places, items, true), before: prevLoc && { ...prevLoc, name: prevName }, after: null });
   return { rows, loose };
 }
 

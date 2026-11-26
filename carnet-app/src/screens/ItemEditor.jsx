@@ -6,6 +6,7 @@ import { upsert, remove, uid } from '../lib/store';
 import { CATS, daysBetween, dayLabel, findVenue, guessCategory, ticketsOf, ticketFields, nameOf } from '../lib/util';
 import { needsApproval, propose, announce } from '../lib/proposals';
 import { altsOf, swapIn, withoutAlt, rankLabel } from '../lib/alts';
+import { costOf, costRow, findPrice } from '../lib/planCost';
 
 // Add or edit something on the trip: from the guide, a search, or typed in.
 export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, onClose }) {
@@ -38,8 +39,19 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
     setRes([]); setQ('');
   }
 
+  const linked = costOf(t.expenses, item?.id);
+  const [cost, setCost] = useState(() => linked
+    ? { amount: String(linked.amount), currency: linked.currency || trip.currency || 'EUR', payer: linked.payer_email, who: Object.keys(linked.shares || {}), on: true }
+    : { amount: '', currency: trip.currency || 'EUR', payer: me, who: t.members.map((m) => m.email.toLowerCase()), on: false });
+
+  function saveCost(itemId, title, day) {
+    if (!cost.on || !(parseFloat(String(cost.amount).replace(',', '.')) > 0)) return;
+    upsert('expenses', costRow({ existing: linked, itemId, tripId: trip.id, title, day, amount: cost.amount, currency: cost.currency, payer: cost.payer, who: cost.who, newId: uid }));
+  }
+
   function save() {
     const id = item?.id || uid();
+    saveCost(id, f.title.trim(), f.day || null);
     const row = {
       id, trip_id: trip.id, place_id: f.place_id, category: f.category, day: f.day || null,
       start_time: f.start_time || null, end_time: f.end_time || null, visibility: f.visibility, status: f.status,
@@ -131,6 +143,7 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
           <div className="s">Swapping makes it the plan and keeps {f.title} as the first backup. Save to keep the change.</div>
         </div>
       )}
+      <CostField t={t} me={me} cost={cost} setCost={setCost} linked={linked} hint={f.price_hint} booked={f.status === 'booked'} />
       <PhotoField f={f} set={set} tripId={trip.id} me={me} members={t.members} />
       <TicketField f={f} set={set} tripId={trip.id} me={me} members={t.members} />
       {f.status === 'booked' && <label className="f">Booking ref<input className="in" value={f.booking_ref || ''} onChange={(e) => set('booking_ref', e.target.value)} /></label>}
@@ -156,6 +169,8 @@ function TicketField({ f, set, tripId, me, members }) {
       const t = await pdfTicket(file);
       qr = t.qr; page = t.canvas;
       if (!page) throw new Error('that PDF has no pages');
+      const price = findPrice(t.text);
+      if (price) set('price_hint', price);
     } else {
       const { img } = await loadImage(file);
       // Small codes need the full resolution; try that, then a smaller copy (blur helps some).
@@ -261,6 +276,45 @@ function PhotoField({ f, set, tripId, me, members }) {
           <div className="s" style={{ color: '#E8E1D6' }}>{open.by ? `Added by ${open.by === me ? 'you' : nameOf(members, open.by)} · ` : ''}tap to close</div>
         </div>
       )}
+    </div>
+  );
+}
+
+// What it cost, in Split: tickets bought for the group become an ordinary shared cost, linked to
+// this plan. A price found on a ticket PDF is offered; edits here and in Split are the same cost.
+function CostField({ t, me, cost, setCost, linked, hint, booked }) {
+  const up = (k, v) => setCost({ ...cost, [k]: v });
+  const name = (e) => (e === me ? 'You' : nameOf(t.members, e));
+  if (!cost.on) {
+    if (!booked && !hint) return null;
+    return (
+      <button className="btn ghost block" onClick={() => setCost({ ...cost, on: true, ...(hint && !cost.amount ? { amount: String(hint.amount), currency: hint.currency } : {}) })}>
+        {hint ? `Add ${hint.currency === 'GBP' ? '£' : hint.currency === 'USD' ? '$' : '€'}${hint.amount.toFixed(2)} from the ticket to Split` : 'Add what the tickets cost to Split'}
+      </button>
+    );
+  }
+  const n = cost.who.length || 1;
+  const amt = parseFloat(String(cost.amount).replace(',', '.')) || 0;
+  return (
+    <div className="col" style={{ gap: 8, background: 'var(--card)', border: '1px solid var(--line)', borderRadius: 16, padding: 12 }}>
+      <div className="between"><label className="f" style={{ margin: 0 }}>Cost · in Split</label>
+        {!linked && <button className="link mute" onClick={() => up('on', false)}>Not now</button>}</div>
+      {hint && !linked && <div className="s">Found {hint.amount.toFixed(2)} {hint.currency} on the ticket.</div>}
+      <div className="row" style={{ gap: 8 }}>
+        <input className="in grow" inputMode="decimal" placeholder="0.00" value={cost.amount} onChange={(e) => up('amount', e.target.value)} aria-label="Amount" />
+        <select className="in" style={{ width: 90 }} value={cost.currency} onChange={(e) => up('currency', e.target.value)} aria-label="Currency">{['EUR', 'GBP', 'USD', 'CHF', 'DKK', 'SEK', 'NOK', 'CZK', 'HUF', 'PLN'].map((c) => <option key={c}>{c}</option>)}</select>
+      </div>
+      <label className="f" style={{ margin: 0 }}>Paid by<select className="in" value={cost.payer} onChange={(e) => up('payer', e.target.value)}>{t.members.map((m) => <option key={m.id} value={m.email.toLowerCase()}>{name(m.email.toLowerCase())}</option>)}</select></label>
+      <div className="s">For</div>
+      <div className="row wrap" style={{ gap: 6 }}>
+        {t.members.map((m) => {
+          const k = m.email.toLowerCase();
+          const on = cost.who.includes(k);
+          return <button key={m.id} className={'chip' + (on ? ' on' : '')} onClick={() => up('who', on ? cost.who.filter((x) => x !== k) : [...cost.who, k])}>{name(k)}</button>;
+        })}
+      </div>
+      {amt > 0 && <div className="s">{n} {n === 1 ? 'person' : 'people'} · {(amt / n).toFixed(2)} {cost.currency} each · saved with the plan</div>}
+      {linked && <div className="s">Already in Split — changes here update it.</div>}
     </div>
   );
 }

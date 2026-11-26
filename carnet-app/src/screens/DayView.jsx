@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react';
 import { kindFor, KIND_WORDS, fetchNearby, fresh, dismiss, catOf, fromYourList } from '../lib/nearby';
+import { lengthFor } from '../lib/slots';
 import { upsert, uid } from '../lib/store';
 import { getMe } from '../lib/me';
 import { walkMin } from '../lib/util';
 import { altsOf, rankLabel } from '../lib/alts';
-import { Icon, CatTag } from '../ui';
+import { Icon, CatTag, Sheet } from '../ui';
 import { buildDay } from '../lib/schedule';
 import { cat, hm, fromMin, dur, stayFor, tripNow, nameOf, dayLabel } from '../lib/util';
 import { span } from '../lib/schedule';
@@ -12,6 +13,7 @@ import ItemEditor from './ItemEditor';
 
 export default function DayView({ t, me, day, pos }) {
   const [edit, setEdit] = useState(null);
+  const [slot, setSlot] = useState(null);
   const home = stayFor(t.stays, day);
   const now = tripNow();
   const { rows, loose } = buildDay({ items: t.items, day, home: (day === now.day && pos) || home, now, places: t.places });
@@ -27,14 +29,14 @@ export default function DayView({ t, me, day, pos }) {
           return (
             <div key={i} className="tl">
               <div className="tm">{fromMin(r.from)}</div>
-              <div className="it" style={{ background: 'transparent', border: '1.5px dashed #C9A96E', cursor: 'default', minWidth: 0, overflow: 'hidden' }}>
-                <div className="k amber">{r.open ? 'Free from here' : `Free · ${dur(r.minutes)}`}</div>
+              <div className="it" role="button" tabIndex={0} onClick={() => setSlot(r)} style={{ background: 'transparent', border: '1.5px dashed #C9A96E', cursor: 'pointer', minWidth: 0, overflow: 'hidden' }}>
+                <div className="between"><div className="k amber">{r.open ? 'Free from here' : `Free · ${dur(r.minutes)}`}</div><span className="s" style={{ color: '#8A5A14', fontWeight: 600 }}>Fill it ›</span></div>
                 {(() => { const k = kindFor(r.from); const mine = r.near ? fromYourList(t.places, t.items, r.near, { kind: k, max: 3, maxWalk: 20, foodOnly: false }) : []; r.ideas = mine.length ? mine : r.ideas; return null; })()}
                 {r.ideas.length ? (
                   <div className="col" style={{ gap: 6, marginTop: 4 }}>
                     {r.ideas.map((p) => (
                       <button key={p.id} className="between" style={{ background: 'none', border: 0, padding: 0, textAlign: 'left', cursor: 'pointer' }}
-                        onClick={() => setEdit({ preset: { title: p.name, place_id: p.id, lat: p.lat, lng: p.lng, address: p.address, category: p.category, day, start_time: fromMin(r.from + (p.walk || 0)) } })}>
+                        onClick={(e) => e.stopPropagation() || setEdit({ preset: { title: p.name, place_id: p.id, lat: p.lat, lng: p.lng, address: p.address, category: p.category, day, start_time: fromMin(r.from + (p.walk || 0)) } })}>
                         <span style={{ minWidth: 0 }}><span className="n" style={{ fontSize: 15 }}>{p.name}</span> <span className="s">· <span style={{ color: cat(p.category).color, fontWeight: 600 }}>{cat(p.category).label}</span>{p.walk != null ? ` · ${p.walk} min` : ''}</span></span>
                         <Icon n="plus" size={16} />
                       </button>
@@ -42,11 +44,11 @@ export default function DayView({ t, me, day, pos }) {
                   </div>
                 ) : null}
                 {r.minutes >= 60 && r.near && day >= now.day && kindFor(r.from) && (
-                  <Nearby near={r.near} kind={kindFor(r.from)} guide={t.places} few={r.ideas.length === 0}
+                  <div onClick={(e) => e.stopPropagation()}><Nearby near={r.near} kind={kindFor(r.from)} guide={t.places} few={r.ideas.length === 0}
                     onAdd={(s) => setEdit({ preset: { title: s.name, lat: s.lat, lng: s.lng, address: s.address, category: catOf(s), day, start_time: fromMin(r.from + (walkMin(r.near, s) || 0)) } })}
-                    onSave={(s) => upsert('places', { id: uid(), owner: getMe().id, city: t.trip.city, name: s.name, lat: s.lat, lng: s.lng, address: s.address, category: catOf(s), source: 'osm', source_detail: 'suggested nearby', link: s.website || null, notes: [s.cuisine, s.hours].filter(Boolean).join(' · ') || null })} />
+                    onSave={(s) => upsert('places', { id: uid(), owner: getMe().id, city: t.trip.city, name: s.name, lat: s.lat, lng: s.lng, address: s.address, category: catOf(s), source: 'osm', source_detail: 'suggested nearby', link: s.website || null, notes: [s.cuisine, s.hours].filter(Boolean).join(' · ') || null })} /></div>
                 )}
-                {!r.ideas.length && !(r.minutes >= 60 && r.near && day >= now.day && kindFor(r.from)) && <div className="s">Nothing from your guide nearby yet.</div>}
+                {!r.ideas.length && !(r.minutes >= 60 && r.near && day >= now.day && kindFor(r.from)) && <div className="s">Tap to see what's near your plans.</div>}
               </div>
             </div>
           );
@@ -98,6 +100,8 @@ export default function DayView({ t, me, day, pos }) {
         </>
       )}
       {!rows.some((r) => r.kind === 'item') && !loose.length && <div className="empty">Nothing planned yet — tap + to add something.</div>}
+      {slot && <FreeSlot t={t} day={day} r={slot} onClose={() => setSlot(null)}
+        onAdd={(p, at) => { setSlot(null); setEdit({ preset: { title: p.name, place_id: p.id && !p.osm ? p.id : undefined, lat: p.lat, lng: p.lng, address: p.address, category: p.category || catOf(p), day, start_time: at } }); }} />}
       {edit && <ItemEditor t={t} me={me} item={edit.item} preset={edit.preset} onClose={() => setEdit(null)} />}
     </div>
   );
@@ -160,5 +164,91 @@ function NearThis({ t, it, day, today, onPick }) {
         </button>
       ))}
     </div>
+  );
+}
+
+// Tapping free time: what's near the plans either side of it — your own list first, for what suits
+// the time, then (if you want more) places nearby that aren't in your guide yet.
+function FreeSlot({ t, day, r, onClose, onAdd }) {
+  const [kind, setKind] = useState(kindFor(r.from) || 'eat');
+  const [more, setMore] = useState(false);
+  const [osm, setOsm] = useState(null);
+  const [saved, setSaved] = useState({});
+  const end = r.open ? null : r.to;
+  const anchors = [r.after, r.before].filter((a) => a && a.lat != null).filter((a, i, all) => all.findIndex((b) => b.name === a.name) === i);
+  // Start: near what comes next, early enough to finish and walk over in time; otherwise when the
+  // slot opens plus the walk there from wherever you'll be. To 5 minutes.
+  const at = (p, a) => {
+    const len = lengthFor(p.category || catOf(p));
+    if (a && a === r.after && end != null) {
+      const t0 = Math.floor((end - len - (walkMin(p, r.after) || 0)) / 5) * 5;
+      if (t0 >= r.from) return fromMin(t0);
+    }
+    return fromMin(Math.ceil((r.from + Math.min(walkMin(r.before || r.after, p) || 0, 30)) / 5) * 5);
+  };
+  const shown = new Set();
+  const sections = anchors.map((a) => {
+    const list = fromYourList(t.places, t.items, a, { kind: kind === 'any' ? null : kind, max: 6, maxWalk: 20, foodOnly: kind !== 'any' })
+      .filter((p) => (kind === 'any' || p.category === kind) && !shown.has(p.id));
+    list.forEach((p) => shown.add(p.id));
+    return { a, list };
+  });
+  const near = anchors[0];
+  useEffect(() => {
+    if (!more || !near || kind === 'any') return;
+    let on = true;
+    setOsm(null);
+    fetchNearby(near, kind).then((l) => on && setOsm(fresh(l, t.places).slice(0, 6)));
+    return () => { on = false; };
+  }, [more, kind, near?.lat]);
+  return (
+    <Sheet title={`Free ${fromMin(r.from)}${end != null ? `–${fromMin(end)}` : ' onwards'}`} onClose={onClose}>
+      <div className="row" style={{ gap: 6 }}>
+        {[['eat', 'Eat'], ['drink', 'Drink'], ['coffee', 'Coffee'], ['any', 'Anything']].map(([k, l]) => (
+          <button key={k} className={'chip' + (kind === k ? ' on' : '')} onClick={() => setKind(k)}>{l}</button>
+        ))}
+      </div>
+      {!anchors.length && <div className="s">Nothing on the plan around this time has a place on the map yet, so there's nothing to look near.</div>}
+      {sections.map(({ a, list }) => (
+        <div key={a.name} className="col" style={{ gap: 6 }}>
+          <div className="k mute">Near {a.name} · from your list</div>
+          {list.length ? (
+            <div className="card" style={{ padding: 0 }}>
+              {list.map((p, i) => (
+                <button key={p.id} className="row" onClick={() => onAdd(p, at(p, a))} style={{ width: '100%', gap: 10, padding: '10px 12px', background: 'none', border: 0, borderTop: i ? '1px solid var(--line)' : 0, textAlign: 'left', cursor: 'pointer', color: 'inherit' }}>
+                  <span style={{ width: 4, alignSelf: 'stretch', borderRadius: 2, background: cat(p.category).color }} />
+                  <span className="grow" style={{ minWidth: 0 }}>
+                    <span className="n" style={{ fontSize: 16, display: 'block' }}>{p.name}</span>
+                    <span className="s"><span style={{ color: cat(p.category).color, fontWeight: 600 }}>{cat(p.category).label}</span> · {p.walk} min walk</span>
+                  </span>
+                  <span className="s" style={{ fontWeight: 600 }}>Add {at(p, a)}</span>
+                </button>
+              ))}
+            </div>
+          ) : <div className="s">Nothing {kind === 'any' ? '' : `for ${kind === 'eat' ? 'food' : kind === 'drink' ? 'a drink' : 'coffee'} `}from your list within 20 minutes.</div>}
+        </div>
+      ))}
+      {near && kind !== 'any' && (!more ? (
+        <button className="btn ghost block" onClick={() => setMore(true)}>More nearby, not in your guide</button>
+      ) : (
+        <div className="col" style={{ gap: 6 }}>
+          <div className="k mute">Near {near.name} · not in your guide · OpenStreetMap</div>
+          {!osm && <div className="s">Looking around…</div>}
+          {osm && !osm.length && <div className="s">Nothing more found nearby.</div>}
+          {osm?.map((s) => (
+            <div key={s.osm} className="row" style={{ gap: 8 }}>
+              <div className="grow" style={{ minWidth: 0 }}>
+                <div className="n" style={{ fontSize: 15 }}>{s.name}</div>
+                <div className="s">{[s.cuisine, `${walkMin(near, s)} min`].filter(Boolean).join(' · ')}</div>
+              </div>
+              {saved[s.osm] ? <span className="s" style={{ color: '#24563F' }}>Saved</span> : (
+                <button className="chip" style={{ fontSize: 12 }} onClick={() => { upsert('places', { id: uid(), owner: getMe().id, city: t.trip.city, name: s.name, lat: s.lat, lng: s.lng, address: s.address, category: catOf(s), source: 'osm', source_detail: 'suggested nearby', link: s.website || null, notes: [s.cuisine, s.hours].filter(Boolean).join(' · ') || null }); setSaved({ ...saved, [s.osm]: 1 }); }}>Save</button>
+              )}
+              <button className="chip" style={{ fontSize: 12 }} onClick={() => onAdd({ ...s, id: null, category: catOf(s) }, at({ ...s, category: catOf(s) }, near))}>Add</button>
+            </div>
+          ))}
+        </div>
+      ))}
+    </Sheet>
   );
 }
