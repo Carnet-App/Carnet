@@ -16,6 +16,7 @@ create table if not exists public.place_ratings (
 create index if not exists place_ratings_trip on public.place_ratings (trip_id);
 
 alter table public.place_ratings enable row level security;
+grant select, insert, update, delete on public.place_ratings to authenticated;
 
 drop policy if exists place_ratings_select on public.place_ratings;
 create policy place_ratings_select on public.place_ratings for select to authenticated using (
