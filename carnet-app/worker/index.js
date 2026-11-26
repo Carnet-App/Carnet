@@ -103,6 +103,50 @@ async function reverse(url) {
   }
 }
 
+// Places to eat, drink or get a coffee near a spot, from OpenStreetMap (free, no ratings):
+// named venues only, chains left out, ranked by how well they're described and how close.
+const NEARBY_KINDS = { eat: ['restaurant'], drink: ['bar', 'pub', 'biergarten'], coffee: ['cafe'] };
+const NEARBY_HOSTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+async function nearby(url) {
+  const lat = +url.searchParams.get('lat'), lng = +url.searchParams.get('lng');
+  const kind = url.searchParams.get('kind') || 'eat';
+  const r = Math.min(1500, Math.max(150, +url.searchParams.get('r') || 600));
+  const am = NEARBY_KINDS[kind];
+  if (!Number.isFinite(lat) || !Number.isFinite(lng) || !am) return json({ error: 'lat, lng and kind (eat, drink, coffee)' }, 400);
+  const q = `[out:json][timeout:12];nwr(around:${r},${lat.toFixed(5)},${lng.toFixed(5)})["amenity"~"^(${am.join('|')})$"]["name"];out center tags 120;`;
+  let data = null;
+  for (const host of NEARBY_HOSTS) {
+    try {
+      const res = await fetch(host, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': UA }, body: 'data=' + encodeURIComponent(q) });
+      if (res.ok) { data = await res.json(); break; }
+    } catch {}
+  }
+  if (!data) return json({ places: [], error: 'map data unavailable' }, 200);
+  const toRad = (d) => (d * Math.PI) / 180;
+  const dist = (a, b) => { const x = toRad(b.lng - a.lng) * Math.cos(toRad((a.lat + b.lat) / 2)), y = toRad(b.lat - a.lat); return Math.round(Math.sqrt(x * x + y * y) * 6371000); };
+  const seen = new Set();
+  const places = (data.elements || []).map((e) => {
+    const t = e.tags || {};
+    const at = e.center || { lat: e.lat, lon: e.lon };
+    if (!t.name || at.lat == null || t.brand || t['brand:wikidata'] || t.disused || t['disused:amenity']) return null;
+    const key = t.name.toLowerCase();
+    if (seen.has(key)) return null;
+    seen.add(key);
+    const p = { name: t.name, lat: at.lat, lng: at.lon };
+    p.d = dist({ lat, lng }, p);
+    p.address = [t['addr:housenumber'], t['addr:street'], t['addr:postcode'], t['addr:city']].filter(Boolean).join(' ') || null;
+    p.cuisine = t.cuisine ? t.cuisine.split(';').slice(0, 2).map((c) => c.replace(/_/g, ' ')).join(', ') : null;
+    p.website = t.website || t['contact:website'] || null;
+    p.hours = t.opening_hours || null;
+    p.amenity = t.amenity;
+    p.osm = `${e.type}/${e.id}`;
+    // Better-described places first (someone cared to map them well), then nearer.
+    p.score = (p.website ? 2 : 0) + (p.hours ? 1 : 0) + (p.cuisine ? 1 : 0) + (t.wikidata ? 1 : 0) + (t.outdoor_seating === 'yes' ? 0.5 : 0) - p.d / 250;
+    return p;
+  }).filter(Boolean).sort((a, b) => b.score - a.score).slice(0, 12);
+  return json({ places }, 200, { 'cache-control': 'public, max-age=86400' });
+}
+
 async function google(url, env) {
   if (!env.GOOGLE_KEY) return json({ results: [], error: 'no google key' }, 404);
   const q = url.searchParams.get('q') || '';
@@ -313,6 +357,8 @@ export default {
       switch (url.pathname) {
         case '/api/geo':
           return geo(url);
+        case '/api/nearby':
+          return nearby(url);
         case '/api/reverse':
           return reverse(url);
         case '/api/maplink':

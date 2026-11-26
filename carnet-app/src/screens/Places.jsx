@@ -10,6 +10,7 @@ import ItemEditor from './ItemEditor';
 import Capture from './Capture';
 import AddToPlan from './AddToPlan';
 import { backupIndex } from '../lib/alts';
+import { fromYourList } from '../lib/nearby';
 const PinPicker = lazy(() => import('./PinPicker'));
 const MapView = lazy(() => import('./MapView'));
 
@@ -245,6 +246,8 @@ export function AddPlace({ city, near, onClose, onAdded }) {
 export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
   const [pinning, setPinning] = useState(false);
   const [editItem, setEditItem] = useState(null);
+  const [other, setOther] = useState(null);
+  const guide = useCityPlaces(initial.city);
   const [p, setP] = useState(initial);
   const [link, setLink] = useState(initial.link || '');
   const [matches, setMatches] = useState(null);
@@ -282,6 +285,22 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
         <div className="s">{p.address || 'No address yet'}</div>
       </div>
       {t && <AddToPlan t={t} me={me} p={p} onEdit={setEditItem} />}
+      {!['eat', 'drink', 'coffee'].includes(p.category) && p.lat != null && (() => {
+        const near = fromYourList(guide.filter((x) => x.id !== p.id), [], p, { max: 5, maxWalk: 15 });
+        return near.length > 0 && (
+          <div className="col" style={{ gap: 6 }}>
+            <div className="k mute">From your list, nearby</div>
+            <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              {near.map((x) => (
+                <button key={x.id} className="chip" style={{ fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => setOther(x)}>
+                  <span style={{ width: 8, height: 8, borderRadius: 4, background: cat(x.category).color }} />{x.name} · {x.walk} min
+                </button>
+              ))}
+            </div>
+          </div>
+        );
+      })()}
+      {other && <PlaceDetail p={other} t={t} me={me} tripId={tripId} onClose={() => setOther(null)} />}
       {unfinished(p) && (
         <div className="card dashed col">
           <div className="k amber">Unfinished · {missing(p)}</div>
