@@ -98,8 +98,6 @@ end $$;
 
 -- Replaces stage 1's version of this function (same trigger: expenses_revision / settlements_revision).
 -- Trigger order on each write: [a_..._tombstone_guard on insert] → ..._legacy_sync → ..._revision.
-grant execute on function public.money_check_expense_shares(jsonb, bigint) to authenticated;
-
 create or replace function public.money_bump_revision()
 returns trigger language plpgsql set search_path = public as $$
 declare

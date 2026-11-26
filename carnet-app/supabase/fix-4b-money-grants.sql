@@ -1,24 +1,26 @@
 -- fix-4b: let signed-in users run the money checks that fire when a cost or payment is saved.
--- fix-4 added public.money_check_expense_shares without a grant; on newer Supabase projects
--- nothing runs unless it's granted, so every new cost was refused ("permission denied for
--- function money_check_expense_shares"). The trigger functions get grants too, to be sure.
--- Safe to run more than once.
+-- On newer Supabase projects nothing runs unless it's granted; fix-4's share check had no grant,
+-- so new costs could be refused. This finds the money functions as they exist in this database
+-- (whatever their exact arguments) and grants each one. Safe to run more than once.
 
--- Before: which of these can't signed-in users run? (The list should be empty after.)
-select p.proname as missing_permission
-from pg_proc p join pg_namespace n on n.oid = p.pronamespace
-where n.nspname = 'public'
-  and p.proname in ('money_check_expense_shares', 'money_bump_revision', 'money_legacy_sync', 'money_remember_delete',
-                    'money_block_resurrection', 'currency_digits', 'to_minor', 'shares_to_minor')
-  and not has_function_privilege('authenticated', p.oid, 'execute');
-
-grant execute on function public.money_check_expense_shares(jsonb, bigint) to authenticated;
-grant execute on function public.money_bump_revision() to authenticated;
-grant execute on function public.money_legacy_sync() to authenticated;
-grant execute on function public.money_remember_delete() to authenticated;
-grant execute on function public.money_block_resurrection() to authenticated;
-grant execute on function public.currency_digits(text) to authenticated;
-grant execute on function public.to_minor(numeric, text) to authenticated;
-grant execute on function public.shares_to_minor(jsonb, text) to authenticated;
+do $$
+declare f record;
+begin
+  for f in
+    select p.oid::regprocedure as sig
+    from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+    where n.nspname = 'public'
+      and (p.proname like 'money\_%' or p.proname in ('currency_digits', 'to_minor', 'shares_to_minor'))
+  loop
+    execute format('grant execute on function %s to authenticated', f.sig);
+  end loop;
+end $$;
 
 notify pgrst, 'reload schema';
+
+-- What's there now, and whether signed-in users can run it (every row should say true).
+select p.oid::regprocedure as function, has_function_privilege('authenticated', p.oid, 'execute') as signed_in_can_run
+from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+where n.nspname = 'public'
+  and (p.proname like 'money\_%' or p.proname in ('currency_digits', 'to_minor', 'shares_to_minor'))
+order by 1;
