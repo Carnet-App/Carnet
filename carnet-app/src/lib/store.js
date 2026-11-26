@@ -228,7 +228,10 @@ let channel;
 // Anything the server refused gets another go each time the app opens,
 // so a fix on the server side brings it back rather than losing it.
 // Conflicts aren't retried: the server's newer copy stands.
-function requeueFailed() {
+// The banner's "Try again": send refused changes now.
+export function retryNow() { requeueFailed(); flush(); }
+
+export function requeueFailed() {
   const retry = state.failed.filter((j) => !j.conflict);
   if (!retry.length) return;
   for (const job of retry) {
@@ -238,6 +241,14 @@ function requeueFailed() {
   state.failed = state.failed.filter((j) => j.conflict);
   emit();
   persist();
+}
+
+// Coming back to the app (iOS resumes it rather than reopening): give refused changes another go.
+if (typeof document !== 'undefined') {
+  let last = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && state.failed.length && Date.now() - last > 30000) { last = Date.now(); requeueFailed(); flush(); }
+  });
 }
 
 export function startSync() {

@@ -1,6 +1,6 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { supabase } from './lib/supabase';
-import { loadLocal, startSync, useStore } from './lib/store';
+import { loadLocal, startSync, useStore, retryNow } from './lib/store';
 import { TabBar, Icon } from './ui';
 import Login from './screens/Login';
 import Home from './screens/Home';
@@ -50,7 +50,7 @@ export default function App() {
 
   return (
     <div className="app">
-      {status && <div className="status" title={failed[0]?.error} onClick={() => failed.length && alert('Server said: ' + failed[failed.length - 1].error)}>{status}</div>}
+      {status && <div className="status" title={failed[0]?.error} onClick={() => { if (!failed.length) return; if (confirm(`Server said: ${failed[failed.length - 1].error}\n\nTry sending ${failed.length > 1 ? 'them' : 'it'} again now?`)) retryNow(); }}>{status}</div>}
       {route.view === 'home' && <Home me={me} go={go} />}
       {route.view === 'guide' && <Places city={route.city} me={me} go={go} onBack={() => go({ view: 'home' })} />}
       {route.view === 'trip' && <TripShell myId={session?.user?.id} route={route} go={go} me={me} setRoute={setRoute} />}
