@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { upsert, uid } from '../lib/store';
-import { daysBetween, dayLabel, hm } from '../lib/util';
+import { daysBetween, dayLabel, hm, tripNow } from '../lib/util';
 import { needsApproval, propose, announce } from '../lib/proposals';
 import { PARTS, freeSlot, partSummary, lengthFor, busyOn } from '../lib/slots';
 import { FOOD_DRINK, withAlt, backupIndex, altsOf, rankLabel } from '../lib/alts';
@@ -10,7 +10,7 @@ import { FOOD_DRINK, withAlt, backupIndex, altsOf, rankLabel } from '../lib/alts
 export default function AddToPlan({ t, me, p, onEdit, compact, onDone }) {
   const item = (t.items || []).find((i) => i.place_id === p.id);
   const days = daysBetween(t.trip.start_date, t.trip.end_date);
-  const today = new Date().toLocaleDateString('en-CA');
+  const today = tripNow().day;
   const [day, setDay] = useState(() => item?.day || days.find((d) => d >= today) || days[0] || null);
   const [part, setPart] = useState(p.category === 'coffee' ? 'morning' : ['drink', 'dance'].includes(p.category) ? 'evening' : 'afternoon');
   const [exact, setExact] = useState('');

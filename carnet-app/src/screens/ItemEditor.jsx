@@ -3,7 +3,7 @@ import { loadImage, toCanvas, readQR, thumbBlob, isPdf, pdfTicket } from '../lib
 import { storeFile, fileUrl } from '../lib/files';
 import { Sheet, Seg, Icon } from '../ui';
 import { upsert, remove, uid } from '../lib/store';
-import { CATS, daysBetween, dayLabel, findVenue, guessCategory, ticketsOf, ticketFields, nameOf } from '../lib/util';
+import { CATS, daysBetween, dayLabel, findVenue, guessCategory, ticketsOf, ticketFields, nameOf, tripNow } from '../lib/util';
 import { needsApproval, propose, announce } from '../lib/proposals';
 import { altsOf, swapIn, withoutAlt, rankLabel } from '../lib/alts';
 import { costOf, costRow, findPrice } from '../lib/planCost';
@@ -14,7 +14,8 @@ export default function ItemEditor({ t, me, item, preset = {}, overrides = {}, o
   const days = daysBetween(trip.start_date, trip.end_date);
   const [f, setF] = useState(() => {
     const b = {
-      title: '', category: 'explore', day: days[0], start_time: '', end_time: '', visibility: 'shared', status: 'planned',
+      // A new plan is for today while the trip is on (the night running to 05:00), else its first day.
+      title: '', category: 'explore', day: days.includes(tripNow().day) ? tripNow().day : days[0], start_time: '', end_time: '', visibility: 'shared', status: 'planned',
       notes: '', booking_ref: '', place_id: null, lat: null, lng: null, address: '',
       ...preset, ...(item || {}), ...overrides,
     };
