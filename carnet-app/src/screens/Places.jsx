@@ -272,7 +272,10 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
 
   return (
     <Sheet onClose={onClose}>
-      <PlacePhoto p={p} size={undefined} style={{ width: '100%', height: 180, borderRadius: 14 }} />
+      <div style={{ position: 'relative' }}>
+        <PlacePhoto p={p} size={undefined} style={{ width: '100%', height: 180, borderRadius: 14 }} />
+        <button aria-label="Close" onClick={onClose} style={{ position: 'absolute', top: 8, right: 8, width: 36, height: 36, borderRadius: 18, border: 0, background: 'rgba(250,248,243,.92)', boxShadow: '0 1px 4px rgba(30,26,22,.25)', display: 'grid', placeItems: 'center', cursor: 'pointer' }}><Icon n="close" size={16} /></button>
+      </div>
       <div>
         <CatTag c={p.category} extra={p.source_detail || ''} />
         <h2 className="h2" style={{ marginTop: 4 }}>{p.name}</h2>

@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { cat } from './lib/util';
 
 const P = {
@@ -43,10 +43,32 @@ export function Sheet({ onClose, children, full, title, className = '' }) {
     document.body.style.overflow = 'hidden';
     return () => (document.body.style.overflow = '');
   }, []);
+  // Pull the handle (or the top of a sheet scrolled to its top) down to close.
+  const box = useRef(null);
+  const drag = useRef(null);
+  const start = (e) => {
+    const el = box.current;
+    if (!el) return;
+    drag.current = { y: e.touches[0].clientY, dy: 0 };
+  };
+  const move = (e) => {
+    if (!drag.current) return;
+    const dy = Math.max(0, e.touches[0].clientY - drag.current.y);
+    drag.current.dy = dy;
+    if (box.current) { box.current.style.transform = `translateY(${dy}px)`; box.current.style.transition = 'none'; }
+  };
+  const end = () => {
+    const d = drag.current;
+    drag.current = null;
+    if (!box.current || !d) return;
+    box.current.style.transition = 'transform .18s ease-out';
+    if (d.dy > 90) { box.current.style.transform = 'translateY(100%)'; setTimeout(() => onClose?.(), 160); }
+    else box.current.style.transform = '';
+  };
   return (
     <div className="sheet-back" onClick={(e) => e.target === e.currentTarget && onClose?.()}>
-      <div className={'sheet' + (full ? ' full' : '') + (className ? ' ' + className : '')} role="dialog" aria-label={title}>
-        {!full && <div className="grab" />}
+      <div ref={box} className={'sheet' + (full ? ' full' : '') + (className ? ' ' + className : '')} role="dialog" aria-label={title}>
+        {!full && <div className="grab-zone" onTouchStart={start} onTouchMove={move} onTouchEnd={end} style={{ margin: '-10px -20px -4px', padding: '10px 20px 12px', display: 'flex', justifyContent: 'center', touchAction: 'none', cursor: 'grab', flex: 'none' }}><div className="grab" /></div>}
         {title && (
           <div className="between">
             <h2 className="h2">{title}</h2>
