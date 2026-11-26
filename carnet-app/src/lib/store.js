@@ -253,12 +253,15 @@ if (typeof document !== 'undefined') {
 
 export function startSync() {
   requeueFailed();
-  const goOnline = () => { state.online = true; emit(); flush().then(pull); };
+  const goOnline = () => { state.online = true; requeueFailed(); emit(); flush().then(pull); };
   const goOffline = () => { state.online = false; emit(); };
   window.addEventListener('online', goOnline);
   window.addEventListener('offline', goOffline);
   document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && goOnline());
   flush().then(pull);
+  // Anything the server refused: tried again every 2 minutes while the app is open, so a fix on
+  // the server side gets it through without anyone pressing a button.
+  setInterval(() => { if (state.failed.some((j) => !j.conflict) && navigator.onLine) { requeueFailed(); flush(); } }, 2 * 60000);
   let t;
   channel?.unsubscribe();
   channel = supabase
