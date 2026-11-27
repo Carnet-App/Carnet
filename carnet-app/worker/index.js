@@ -369,25 +369,42 @@ async function mapLink(url) {
   }
 }
 
-async function transit(url, env) {
-  // Paris only for now: Île-de-France Mobilités journey planner (PRIM).
+async function transit(url, env, ctx) {
+  // Paris only for now: Île-de-France Mobilités journey planner (PRIM). Optional `at` (YYYYMMDDTHHMM)
+  // with arrive=1 plans to arrive by then (a plan's start); without it, leaving now.
   if (!env.PRIM_TOKEN) return json({ error: 'no transit token' }, 404);
-  const [flat, flng] = (url.searchParams.get('from') || '').split(',');
-  const [tlat, tlng] = (url.searchParams.get('to') || '').split(',');
+  const [flat, flng] = (url.searchParams.get('from') || '').split(',').map(Number);
+  const [tlat, tlng] = (url.searchParams.get('to') || '').split(',').map(Number);
+  if (![flat, flng, tlat, tlng].every(Number.isFinite)) return json({ error: 'from and to as lat,lng' }, 400);
+  const at = /^\d{8}T\d{4}$/.test(url.searchParams.get('at') || '') ? url.searchParams.get('at') : null;
+  const arrive = !!at && url.searchParams.get('arrive') === '1';
+  // Kept at Cloudflare for a few hours: the same hop at the same hour is asked once.
+  const edge = typeof caches !== 'undefined' ? caches.default : null;
+  const r3 = (n) => n.toFixed(3);
+  const key = new Request(`https://${url.host}/api/transit?k=${r3(flat)},${r3(flng)},${r3(tlat)},${r3(tlng)},${at ? at.slice(0, 11) : 'now'},${arrive ? 'a' : 'd'}`);
+  const hit = at && edge && (await edge.match(key));
+  if (hit) return hit;
   const p = new URL('https://prim.iledefrance-mobilites.fr/marketplace/v2/navitia/journeys');
   p.searchParams.set('from', `${flng};${flat}`);
   p.searchParams.set('to', `${tlng};${tlat}`);
   p.searchParams.set('count', '1');
+  if (at) { p.searchParams.set('datetime', at + '00'); p.searchParams.set('datetime_represents', arrive ? 'arrival' : 'departure'); }
   const r = await fetch(p, { headers: { apikey: env.PRIM_TOKEN, accept: 'application/json' } });
   if (!r.ok) return json({ error: 'prim ' + r.status }, 502);
   const d = await r.json();
   const j = d.journeys?.[0];
   if (!j) return json({ error: 'no journey' }, 404);
-  const lines = (j.sections || [])
+  const secs = j.sections || [];
+  const lines = secs
     .filter((s) => s.type === 'public_transport')
     .map((s) => s.display_informations?.code && `${s.display_informations.commercial_mode || ''} ${s.display_informations.code}`.trim())
     .filter(Boolean);
-  return json({ minutes: Math.round(j.duration / 60), lines });
+  const walking = secs.filter((s) => s.type === 'street_network' || s.type === 'transfer').reduce((n, s) => n + (s.duration || 0), 0);
+  const hhmm = (t) => (t && t.length >= 13 ? `${t.slice(9, 11)}:${t.slice(11, 13)}` : null);
+  const res = json({ minutes: Math.round(j.duration / 60), lines, walking: Math.round(walking / 60), depart: hhmm(j.departure_date_time), arrive: hhmm(j.arrival_date_time) },
+    200, at ? { 'cache-control': 'public, max-age=21600' } : {});
+  if (at && edge) { const put = edge.put(key, res.clone()); ctx?.waitUntil ? ctx.waitUntil(put) : await put; }
+  return res;
 }
 
 async function invite(req, env) {
@@ -487,7 +504,7 @@ export default {
           return googlePhoto(url, env, ctx);
         case '/api/transit':
           if (!(await signedIn(req, env))) return json({ error: 'sign in' }, 401);
-          return transit(url, env);
+          return transit(url, env, ctx);
         case '/api/invite':
           if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
           return invite(req, env);

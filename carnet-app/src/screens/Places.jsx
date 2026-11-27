@@ -14,6 +14,7 @@ import { fromYourList } from '../lib/nearby';
 import { hoursLine, closedDays, priceSigns, openAt } from '../lib/facts';
 import { bestNow, whyTag } from '../lib/bestNow';
 import VisitBlock from './VisitBlock';
+import { useHop, hasTransit, linesText } from '../lib/travel';
 import { lastReport, onReport } from '../lib/googleFill';
 const PinPicker = lazy(() => import('./PinPicker'));
 const MapView = lazy(() => import('./MapView'));
@@ -404,6 +405,9 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me, item: visit })
   }
 
   const walk = here && p.lat != null ? walkMin(here, p) : null;
+  // From where you are: on foot, or by Métro/RER when it's a long walk and that's quicker.
+  const way = useHop(here, p.lat != null ? p : null, { enabled: hasTransit(p.city) });
+  const fromYou = way && way.mode === 'walk' ? ` · ${way.walk} min walk from you` : '';
   const hl = hoursLine(p.hours);
   const shut = closedDays(p.hours);
   const facts = [
@@ -446,7 +450,12 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me, item: visit })
             {ownsIt && <button className="link mute" style={{ fontSize: 13.5 }} onClick={() => setNaming(true)}>Edit name</button>}
           </div>
         )}
-        <div className="s" style={{ fontSize: 13.5 }}>{p.address || 'No address yet'}{walk != null ? ` · ${walk} min walk from you` : ''}</div>
+        <div className="s" style={{ fontSize: 13.5 }}>{p.address || 'No address yet'}{fromYou}</div>
+        {way?.mode === 'transit' && (
+          <div className="row" style={{ gap: 6, marginTop: 4, font: '500 13.5px var(--sans)' }}><Icon n="metro" size={15} w={2} />
+            <span><b style={{ fontWeight: 600 }}>{way.minutes} min</b> by {linesText(way.lines)} from you<span className="s" style={{ fontSize: 13 }}> · or {way.walk} min walk</span></span>
+          </div>
+        )}
       </div>
 
       {fromPlan && <VisitBlock t={t} me={me} item={visit} onEdit={() => setEditItem(visit)} />}

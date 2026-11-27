@@ -12,7 +12,8 @@ export function span(it) {
 }
 
 // Builds a day: items in order, travel between them, and the free gaps worth filling.
-export function buildDay({ items, day, home, now, places, minGap = 45 }) {
+// hop(from, to, item): the way to get there, { minutes, mode, … } (walking if not given).
+export function buildDay({ items, day, home, now, places, minGap = 45, hop }) {
   const list = items
     .filter((i) => i.day === day && i.start_time)
     .sort((a, b) => a.start_time.localeCompare(b.start_time));
@@ -37,10 +38,11 @@ export function buildDay({ items, day, home, now, places, minGap = 45 }) {
     const { start, end } = span(it);
     const pl = it.place_id ? placeById.get(it.place_id) : null;
     const loc = it.lat != null ? { lat: it.lat, lng: it.lng } : pl?.lat != null ? { lat: pl.lat, lng: pl.lng } : null;
-    const travel = walkMin(prevLoc, loc);
+    const way = hop && prevLoc && loc ? hop(prevLoc, loc, it) : null;
+    const travel = way?.minutes ?? walkMin(prevLoc, loc);
     const freeEnd = start - (travel || 0);
     if (freeEnd - cursor >= minGap) rows.push({ ...gapRow(cursor, freeEnd, prevLoc || loc, places, items), before: prevLoc && { ...prevLoc, name: prevName }, after: loc && { ...loc, name: it.title }, prev: prevItem });
-    if (rows.length && travel) rows.push({ kind: 'travel', minutes: travel, to: it });
+    if (rows.length && travel) rows.push({ kind: 'travel', minutes: travel, to: it, way, from: prevLoc, toLoc: loc });
     rows.push({ kind: 'item', item: it, start, end });
     cursor = Math.max(cursor, end);
     // Where you'll be next is this plan's spot. A plan with no spot on the map leaves that

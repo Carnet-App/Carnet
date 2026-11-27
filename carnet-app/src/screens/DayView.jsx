@@ -7,6 +7,7 @@ import { walkMin } from '../lib/util';
 import { altsOf, rankLabel } from '../lib/alts';
 import { Icon, CatTag, Sheet } from '../ui';
 import { buildDay } from '../lib/schedule';
+import { bestHop, ensureHop, hasTransit, useTravelVersion, atOf, linesText, known, TRANSIT_FROM } from '../lib/travel';
 import { cat, hm, fromMin, dur, stayFor, tripNow, nameOf, dayLabel } from '../lib/util';
 import { span } from '../lib/schedule';
 import ItemEditor from './ItemEditor';
@@ -29,7 +30,16 @@ export default function DayView({ t, me, day, pos }) {
   const [open, setOpen] = useState(null);
   const home = stayFor(t.stays, day);
   const now = tripNow();
-  const { rows, loose } = buildDay({ items: t.items, day, home: (day === now.day && pos) || home, now, places: t.places });
+  // Between plans: walk, or Métro/RER when it's quicker (Paris); free time counts the quicker one.
+  useTravelVersion();
+  const transit = hasTransit(t.trip.city);
+  const hop = transit ? (a, b, it) => bestHop(a, b, atOf(it.day, it.start_time)) : null;
+  const { rows, loose } = buildDay({ items: t.items, day, home: (day === now.day && pos) || home, now, places: t.places, hop });
+  const hopsKey = rows.filter((r) => r.kind === 'travel' && r.way?.walk >= TRANSIT_FROM).map((r) => `${r.to.id}:${r.to.start_time}`).join('|');
+  useEffect(() => {
+    if (!transit || day < now.day) return;
+    for (const r of rows) if (r.kind === 'travel' && r.way?.walk >= TRANSIT_FROM) ensureHop(r.from, r.toLoc, { at: atOf(r.to.day, r.to.start_time), arrive: true });
+  }, [hopsKey, transit]);
   // What each free slot is for, knowing the rest of the day (lunch after a coffee, not more brunch).
   const dayItems = t.items.filter((i) => i.day === day);
   const kindAt = (r) => kindForDay(r.from, dayItems, r.prev?.category);
@@ -37,10 +47,19 @@ export default function DayView({ t, me, day, pos }) {
   return (
     <div className="col" style={{ gap: 6 }}>
       {rows.map((r, i) => {
-        if (r.kind === 'travel')
-          return (
-            <div key={i} className="tr"><Icon n="walk" size={12} w={2} />{r.minutes} min walk</div>
-          );
+        if (r.kind === 'travel') {
+          const w = r.way;
+          if (w?.mode === 'transit') {
+            // Leave by: when the journey sets off to arrive in time, else the start minus the trip.
+            const leave = w.depart || (r.to.start_time ? fromMin(Math.max(0, (+r.to.start_time.slice(0, 2) * 60 + +r.to.start_time.slice(3, 5)) - w.minutes)) : null);
+            return (
+              <div key={i} className="tr" style={{ color: 'var(--ink)' }}><Icon n="metro" size={13} w={2} />
+                <span><b style={{ fontWeight: 600 }}>{linesText(w.lines)}</b> · {w.minutes} min{leave ? ` · leave by ${leave}` : ''}<span style={{ color: 'var(--mute)' }}> · or {w.walk} min walk</span></span>
+              </div>
+            );
+          }
+          return <div key={i} className="tr"><Icon n="walk" size={12} w={2} />{r.minutes} min walk{transit && r.minutes >= TRANSIT_FROM && day >= now.day && navigator.onLine && !known(r.from, r.toLoc, atOf(r.to.day, r.to.start_time)) ? <span style={{ color: 'var(--mute)' }}> · checking transport…</span> : ''}</div>;
+        }
         if (r.kind === 'gap') {
           const k = kindAt(r);
           return (
