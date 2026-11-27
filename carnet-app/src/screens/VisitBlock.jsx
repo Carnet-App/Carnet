@@ -1,10 +1,13 @@
-import { useState } from 'react';
+import { lazy, Suspense, useState } from 'react';
 import { Icon, CatTag, Sheet } from '../ui';
 import { ticketsOf, dayLabel, hm, tripNow, nameOf, cat } from '../lib/util';
 import { costOf } from '../lib/planCost';
 import { altsOf, rankLabel } from '../lib/alts';
 import { FullPass } from './Wallet';
 import ItemEditor from './ItemEditor';
+import { fromYourList } from '../lib/nearby';
+import { planAnchor, showNear } from '../lib/near';
+const PlaceDetail = lazy(() => import('./Places').then((m) => ({ default: m.PlaceDetail })));
 
 const money = (e) => (e ? new Intl.NumberFormat('en-GB', { style: 'currency', currency: e.currency || 'EUR' }).format(Number(e.amount) || 0) : null);
 
@@ -51,6 +54,34 @@ export default function VisitBlock({ t, me, item, onEdit }) {
   );
 }
 
+// Food and drink from your list near a plan, and a way to see everything near it in Places.
+export function NearPlan({ t, me, item, onOpen }) {
+  const [open, setOpen] = useState(null);
+  const a = planAnchor(item, t.places);
+  if (!a) return null;
+  const list = fromYourList(t.places.filter((p) => p.id !== item.place_id), t.items, a, { max: 4, maxWalk: 15, foodOnly: true });
+  return (
+    <div className="col" style={{ gap: 6 }}>
+      <div className="k mute">Food &amp; drink near this, from your list</div>
+      {list.length ? (
+        <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+          {list.map((p, i) => {
+            const c = cat(p.category);
+            return (
+              <button key={p.id} className="row" onClick={() => (onOpen ? onOpen(p) : setOpen(p))} style={{ width: '100%', gap: 10, padding: '10px 12px', background: 'none', border: 0, borderTop: i ? '1px solid var(--line)' : 0, textAlign: 'left', cursor: 'pointer', color: 'inherit' }}>
+                <span style={{ width: 4, alignSelf: 'stretch', borderRadius: 2, background: c.color }} />
+                <span className="grow" style={{ minWidth: 0 }}><span className="n" style={{ fontSize: 16, display: 'block' }}>{p.name}</span><span className="s"><span style={{ color: c.color, fontWeight: 600 }}>{c.label}</span>{p.cuisine ? ` · ${p.cuisine}` : ''} · {p.walk} min walk</span></span>
+              </button>
+            );
+          })}
+        </div>
+      ) : <div className="s">Nothing from your list within a 15-minute walk.</div>}
+      <button className="btn ghost block" onClick={() => showNear(a)}>See everything near this</button>
+      {open && <Suspense fallback={null}><PlaceDetail p={open} t={t} me={me} tripId={t.trip.id} onClose={() => setOpen(null)} /></Suspense>}
+    </div>
+  );
+}
+
 // A plan that isn't a place (a train, "Pack", "Airport → hotel"): just the visit, and the editor.
 export function VisitSheet({ t, me, item, onClose }) {
   const [edit, setEdit] = useState(false);
@@ -61,6 +92,7 @@ export function VisitSheet({ t, me, item, onClose }) {
         <button className="icon" aria-label="Close" onClick={onClose}><Icon n="close" size={16} /></button>
       </div>
       <VisitBlock t={t} me={me} item={item} onEdit={() => setEdit(true)} />
+      <NearPlan t={t} me={me} item={item} />
       {item.notes && <div className="s" style={{ whiteSpace: 'pre-line', color: 'var(--ink)', fontSize: 14 }}>{item.notes}</div>}
       {item.lat != null && <a className="btn ghost block" href={`https://maps.apple.com/?daddr=${item.lat},${item.lng}&dirflg=w`} target="_blank" rel="noreferrer">Directions in Maps</a>}
       <button className="link mute" onClick={() => setEdit(true)}>All details (time, tickets, backups, remove)</button>

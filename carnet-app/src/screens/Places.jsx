@@ -13,8 +13,10 @@ import { backupIndex } from '../lib/alts';
 import { fromYourList } from '../lib/nearby';
 import { hoursLine, closedDays, priceSigns, openAt } from '../lib/facts';
 import { bestNow, whyTag } from '../lib/bestNow';
-import VisitBlock from './VisitBlock';
+import VisitBlock, { NearPlan } from './VisitBlock';
 import { useHop, hasTransit, linesText } from '../lib/travel';
+import { useNear, setNear, planAnchors, placeAnchor, beforeTime } from '../lib/near';
+import { lengthFor } from '../lib/slots';
 import { lastReport, onReport } from '../lib/googleFill';
 const PinPicker = lazy(() => import('./PinPicker'));
 const MapView = lazy(() => import('./MapView'));
@@ -108,7 +110,10 @@ export default function Places({ t, me, city, onBack, open }) {
   // Walking times from you when you're in town; otherwise from where you're staying.
   const mid = useMemo(() => { const v = all.filter((p) => p.lat != null); if (!v.length) return null; const m = (k) => v.map((p) => p[k]).sort((a, b) => a - b)[v.length >> 1]; return { lat: m('lat'), lng: m('lng') }; }, [all]);
   const inTown = (x) => x && (!mid || distM(mid, x) < 30000);
-  const from = inTown(here) ? here : inTown(home) ? home : null;
+  // Or from what you've chosen to look near: a plan, a place, where you're staying, an address.
+  const nearA = useNear();
+  const [picking, setPicking] = useState(false);
+  const from = nearA || (inTown(here) ? here : inTown(home) ? home : null);
   const myId = getMe().id;
   const rated = useAllRatings();
   const been = (p) => { const m = mineOf(rated.get(p.id)); return m ? m.visited : !!p.visited; };
@@ -136,15 +141,34 @@ export default function Places({ t, me, city, onBack, open }) {
   // "Best now" needs a now and a here: you're in town, or the trip is on today.
   const now = tripNow();
   const tripOn = t && t.trip.start_date <= now.day && (t.trip.end_date || t.trip.start_date) >= now.day;
-  const bestOn = sort === 'best' && (tripOn || inTown(here));
+  // Near a plan, "best" is for the time before it, on its day: dinner before a 21:00 show.
+  const before = beforeTime(nearA);
+  const onDay = before ? nearA.day : now.day;
+  const bestOn = sort === 'best' && (!!before || tripOn || inTown(here));
   const best = useMemo(() => bestOn ? bestNow(list, {
-    ratings: rated, mineOf, showPassed,
-    dayItems: (t?.items || []).filter((i) => i.day === now.day),
-    plannedToday: new Set((t?.items || []).filter((i) => i.day === now.day && i.place_id).map((i) => i.place_id)),
-  }) : null, [bestOn, list, rated, showPassed, t?.items, now.day]);
+    ratings: rated, mineOf, showPassed, date: before || new Date(),
+    dayItems: (t?.items || []).filter((i) => i.day === onDay && i.id !== nearA?.id),
+    plannedToday: new Set((t?.items || []).filter((i) => i.day === onDay && i.place_id).map((i) => i.place_id)),
+  }) : null, [bestOn, list, rated, showPassed, t?.items, onDay, nearA?.id, before?.getTime()]);
+  // When to go, to be done and over to the plan in time: "Dinner · 19:05".
+  const timeFor = (p) => {
+    if (!before || nearA.start == null || p.walk == null) return null;
+    const m = Math.floor((nearA.start - lengthFor(p.category) - p.walk - 5) / 5) * 5;
+    return m > 0 ? `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}` : null;
+  };
   const todo = all.filter(unfinished).length;
+  // Looking near something: what's over 20 minutes' walk from it goes to the end, whatever it suits.
+  const nearCut = (gs) => {
+    if (!nearA) return gs;
+    const far = gs.flatMap((g) => (g.key === 'been' ? [] : g.rows.filter((r) => r.walk == null || r.walk > 20)));
+    const kept = gs.map((g) => (g.key === 'been' ? g : { ...g, rows: g.rows.filter((r) => r.walk != null && r.walk <= 20) })).filter((g) => g.rows.length);
+    if (!far.length) return kept;
+    const at = kept.findIndex((g) => g.key === 'been');
+    const further = { key: 'further', title: `Further from ${nearA.name}`, sub: '', rows: far.sort((a, b) => (a.walk ?? 9e9) - (b.walk ?? 9e9)) };
+    return at < 0 ? [...kept, further] : [...kept.slice(0, at), further, ...kept.slice(at)];
+  };
   const groups = best
-    ? best.groups.map((g) => ({ title: g.title, sub: '', rows: g.rows, key: g.key }))
+    ? nearCut(best.groups.map((g) => ({ title: before ? g.title.replace(/ · now$/, ` · before ${nearA.name}`).replace(/ · later today$/, ' · later that day') : g.title, sub: '', rows: g.rows, key: g.key })))
     : (sort === 'near' || sort === 'best') && from
     ? BANDS.map(([max, title, sub], i) => ({ title, sub, rows: list.filter((p) => p.walk != null && p.walk < max && (i === 0 || p.walk >= BANDS[i - 1][0])) }))
       .concat([{ title: 'Not on the map yet', sub: '', rows: list.filter((p) => p.walk == null) }]).filter((g) => g.rows.length)
@@ -183,6 +207,7 @@ export default function Places({ t, me, city, onBack, open }) {
       </div>
 
       <div style={{ display: 'flex', gap: 6, overflowX: 'auto', scrollbarWidth: 'none', paddingRight: 24, maskImage: 'linear-gradient(to right, #000 88%, transparent)', WebkitMaskImage: 'linear-gradient(to right, #000 88%, transparent)' }}>
+        <button className={'chip' + (nearA ? ' on' : '')} style={{ fontSize: 12.5, padding: '6px 10px', flex: 'none' }} onClick={() => setPicking(true)}>Near: {nearA ? nearA.name.slice(0, 16) : inTown(here) ? 'you' : 'your stay'} ▾</button>
         <Drop label="Best now" value={sort} onChange={setSort} options={[['best', 'Best now'], ['near', 'Nearest'], ['recent', 'Recently added'], ['az', 'A to Z']]} />
         {timed && <button className={'chip' + (openNow ? ' on' : '')} style={{ fontSize: 12.5, padding: '6px 10px', flex: 'none' }} onClick={() => setOpenNow(!openNow)}>Open now</button>}
         {cuisines.length > 1 && <Drop label="Food" value={food} onChange={setFood} options={[['any', 'Any food'], ...cuisines.map((k) => [k, k[0].toUpperCase() + k.slice(1)])]} />}
@@ -200,13 +225,21 @@ export default function Places({ t, me, city, onBack, open }) {
       )}
       {status === 'unfinished' && <div className="s">Open one to pin it on the map or find it by name.</div>}
 
-      {best?.strip.length > 0 && !q.trim() && c === 'all' && <NowStrip rows={best.strip} onOpen={setDetail} />}
+      {nearA && (
+        <div className="card row" style={{ gap: 10, padding: '10px 12px', background: '#ECEAFA', borderColor: '#DCD8F5' }}>
+          <Icon n="pin" size={16} color="#4A3F9C" />
+          <span className="grow" style={{ font: '500 14px var(--sans)', color: '#4A3F9C' }}>Near <b style={{ fontWeight: 600 }}>{nearA.name}</b>{nearA.kind === 'plan' && nearA.day ? ` · ${dayLabel(nearA.day, { weekday: 'short' })}${nearA.start != null ? ' ' + String(Math.floor(nearA.start / 60)).padStart(2, '0') + ':' + String(nearA.start % 60).padStart(2, '0') : ''}` : ''}</span>
+          <button className="link" style={{ color: '#4A3F9C' }} onClick={() => setPicking(true)}>Change</button>
+          <button aria-label="Back to near you" onClick={() => setNear(null)} style={{ background: 'none', border: 0, cursor: 'pointer', display: 'flex' }}><Icon n="close" size={14} color="#4A3F9C" /></button>
+        </div>
+      )}
+      {best?.strip.length > 0 && !q.trim() && c === 'all' && <NowStrip rows={best.strip} onOpen={setDetail} title={before ? `Before ${nearA.name} · near it` : nearA ? `Near ${nearA.name}` : 'Fits now · near you'} timeFor={before ? timeFor : null} />}
 
       {groups.map((g) => (
         <div key={g.key || g.title || 'all'} className="col" style={{ gap: 6 }}>
           {g.title && <div className="k" style={{ marginTop: 4, color: GROUP_COLOR[g.key] || 'var(--mute)' }}>{g.title}{g.sub ? ` · ${g.sub}` : ''}</div>}
           <div className={view === 'cards' ? 'col' : ''} style={view === 'cards' ? { gap: 8 } : { borderRadius: 14, overflow: 'hidden', border: '1px solid var(--line)', background: 'var(--card)' }}>
-            {g.rows.map((p, i) => <PlaceRow key={p.id} p={p} first={!i} rich={view === 'cards'} faded={g.key === 'been' || g.key === 'done'} it={onTrip.get(p.id)} backup={backups.get(p.id)} t={t} been={been(p)} votes={rated.get(p.id)} by={!mine(p) && onTrip.get(p.id)?.created_by_email ? nameOf(t.members, onTrip.get(p.id).created_by_email) : null} onOpen={() => setDetail(p)} onAdd={() => setQuick(p)} />)}
+            {g.rows.map((p, i) => <PlaceRow key={p.id} p={p} first={!i} rich={view === 'cards'} faded={g.key === 'been' || g.key === 'done' || g.key === 'further'} it={onTrip.get(p.id)} backup={backups.get(p.id)} t={t} been={been(p)} votes={rated.get(p.id)} by={!mine(p) && onTrip.get(p.id)?.created_by_email ? nameOf(t.members, onTrip.get(p.id).created_by_email) : null} onOpen={() => setDetail(p)} onAdd={() => setQuick(p)} />)}
           </div>
         </div>
       ))}
@@ -230,6 +263,7 @@ export default function Places({ t, me, city, onBack, open }) {
       )}
       {cap && <Capture me={me} defaultCity={cityName} onClose={() => setCap(false)} />}
       {map && <Suspense fallback={null}><MapView t={t} places={all} onClose={() => setMap(false)} /></Suspense>}
+      {picking && <NearPicker t={t} places={all} here={inTown(here) ? here : null} home={home} onClose={() => setPicking(false)} />}
     </div>
   );
 }
@@ -237,17 +271,65 @@ export default function Places({ t, me, city, onBack, open }) {
 // One place in the list: a stripe in its category's colour, picture, name, and a line of what
 // matters (type, walk, who added it, been / thumbs, or what's missing). On the right, when it's
 // on the plan, or + to put it there.
-const GROUP_COLOR = { now: '#A8472A', later: '#8E3A5C', any: '#2E5C8A', done: 'var(--mute)', been: '#24563F' };
+const GROUP_COLOR = { now: '#A8472A', later: '#8E3A5C', any: '#2E5C8A', done: 'var(--mute)', been: '#24563F', further: 'var(--mute)' };
 const TONE = { open: '#2F6B57', warn: '#8A5A14', later: '#8A5A14', closed: '#A8472A' };
 const away = (w) => (w > 45 ? `${(w * 80 / 1300).toFixed(1)} km` : `${w} min`);
 // Why the place is worth it, in a line: cuisine and price, else the start of its note.
 const whyLine = (p) => [p.cuisine, p.price_text || priceSigns(p)].filter(Boolean).join(' · ') || (p.notes ? p.notes.split('\n')[0].slice(0, 70) : '');
 
+// Choosing what to look near: you, your stay, a plan, a place on your list, or an address.
+function NearPicker({ t, places, here, home, onClose }) {
+  const [q, setQ] = useState('');
+  const [found, setFound] = useState(null);
+  const pick = (a) => { setNear(a); onClose(); };
+  const plans = t ? planAnchors(t.items, places, tripNow().day) : [];
+  const mine = q.trim().length >= 2 ? places.filter((p) => p.lat != null && p.name.toLowerCase().includes(q.trim().toLowerCase())).slice(0, 6) : [];
+  const search = async () => setFound(await findVenue(`${q} ${t?.trip.city || places[0]?.city || ''}`, here || home, null, { name: q }).catch(() => []));
+  const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+  const Row = ({ title, sub, onClick }) => (
+    <button className="row" onClick={onClick} style={{ width: '100%', gap: 10, padding: '11px 12px', background: 'none', border: 0, borderTop: '1px solid var(--line)', textAlign: 'left', cursor: 'pointer', color: 'inherit' }}>
+      <span className="grow" style={{ minWidth: 0 }}><span className="n" style={{ fontSize: 16, display: 'block' }}>{title}</span>{sub && <span className="s">{sub}</span>}</span>
+    </button>
+  );
+  return (
+    <Sheet title="Look near…" onClose={onClose}>
+      <div className="card" style={{ padding: 0, overflow: 'hidden' }}>
+        <div style={{ marginTop: -1 }}>
+          {here && <Row title="You" sub="where you are now" onClick={() => pick(null)} />}
+          {home && <Row title="Where you’re staying" sub={home.name} onClick={() => pick({ kind: 'stay', name: 'your stay', lat: home.lat, lng: home.lng })} />}
+        </div>
+      </div>
+      {plans.length > 0 && (
+        <div className="col" style={{ gap: 6 }}>
+          <div className="k mute">A plan</div>
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}><div style={{ marginTop: -1 }}>
+            {plans.slice(0, 12).map((a) => <Row key={a.id} title={a.name} sub={`${dayLabel(a.day, { weekday: 'short', day: 'numeric' })}${a.start != null ? ' · ' + hhmm(a.start) : ''}`} onClick={() => pick(a)} />)}
+          </div></div>
+        </div>
+      )}
+      <div className="col" style={{ gap: 6 }}>
+        <div className="k mute">A place or an address</div>
+        <form className="row" style={{ gap: 8 }} onSubmit={(e) => { e.preventDefault(); search(); }}>
+          <input className="in grow" value={q} onChange={(e) => { setQ(e.target.value); setFound(null); }} placeholder="Crazy Horse, Rue Oberkampf…" />
+          <button className="btn sm" disabled={q.trim().length < 2}>Find</button>
+        </form>
+        {(mine.length > 0 || found?.length > 0) && (
+          <div className="card" style={{ padding: 0, overflow: 'hidden' }}><div style={{ marginTop: -1 }}>
+            {mine.map((p) => <Row key={p.id} title={p.name} sub="on your list" onClick={() => pick(placeAnchor(p))} />)}
+            {(found || []).filter((r) => r.lat != null).slice(0, 5).map((r, i) => <Row key={'f' + i} title={r.name} sub={r.address} onClick={() => pick({ kind: 'spot', name: r.name, lat: r.lat, lng: r.lng })} />)}
+          </div></div>
+        )}
+        {found && !found.length && <div className="s">Nothing found for “{q}”.</div>}
+      </div>
+    </Sheet>
+  );
+}
+
 // Places that suit right now and are a short walk away, across the top of the list.
-function NowStrip({ rows, onOpen }) {
+function NowStrip({ rows, onOpen, title, timeFor }) {
   return (
     <div className="col" style={{ gap: 8 }}>
-      <div className="between"><div className="k">Fits now · near you</div><div className="s">a short walk · open</div></div>
+      <div className="between"><div className="k">{title}</div><div className="s">a short walk · open</div></div>
       <div style={{ display: 'flex', gap: 8, overflowX: 'auto', scrollbarWidth: 'none', margin: '0 -20px', padding: '0 20px' }}>
         {rows.map((p) => {
           const k = cat(p.category);
@@ -256,7 +338,7 @@ function NowStrip({ rows, onOpen }) {
             <button key={p.id} onClick={() => onOpen(p)} style={{ width: 160, flex: 'none', background: 'var(--card)', border: '1px solid var(--soft)', borderRadius: 14, overflow: 'hidden', padding: 0, textAlign: 'left', cursor: 'pointer', color: 'inherit', opacity: p.forLater ? 0.85 : 1 }}>
               <PlacePhoto p={p} size={undefined} style={{ display: 'block', width: '100%', height: 84, borderRadius: 0, objectFit: 'cover' }} />
               <span className="col" style={{ padding: '8px 10px', gap: 3 }}>
-                <span className="pill" style={{ alignSelf: 'flex-start', background: k.bg, color: k.color, fontSize: 11 }}>{whyTag(p)}</span>
+                <span className="pill" style={{ alignSelf: 'flex-start', background: k.bg, color: k.color, fontSize: 11 }}>{timeFor?.(p) && p.win ? `${whyTag(p).split(' · ')[0]} · ${timeFor(p)}` : whyTag(p)}</span>
                 <span style={{ font: '400 17px/1.15 var(--serif)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{p.name}</span>
                 <span className="s" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{[p.walk != null && away(p.walk), hl?.text].filter(Boolean).join(' · ')}</span>
               </span>
@@ -459,6 +541,7 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me, item: visit })
       </div>
 
       {fromPlan && <VisitBlock t={t} me={me} item={visit} onEdit={() => setEditItem(visit)} />}
+      {fromPlan && <NearPlan t={t} me={me} item={visit} onOpen={setOther} />}
 
       {actions.length > 0 && (
         <div className="row" style={{ gap: 8 }}>
@@ -506,12 +589,13 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me, item: visit })
 
       {t && !fromPlan && <AddToPlan t={t} me={me} p={p} onEdit={setEditItem} />}
 
-      {p.lat != null && (() => {
+      {p.lat != null && !fromPlan && (() => {
         const near = fromYourList(guide.filter((x) => x.id !== p.id), [], p, { max: 5, maxWalk: 15 });
         return near.length > 0 && (
           <div className="col" style={{ gap: 6 }}>
             <div className="k mute">Near it, from your list</div>
             <div className="row" style={{ gap: 6, flexWrap: 'wrap' }}>
+              <button className="chip" style={{ fontSize: 12.5 }} onClick={() => { setNear(placeAnchor(p)); onClose(); }}>All near here ›</button>
               {near.map((x) => (
                 <button key={x.id} className="chip" style={{ fontSize: 12.5, display: 'inline-flex', alignItems: 'center', gap: 6 }} onClick={() => setOther(x)}>
                   <span style={{ width: 8, height: 8, borderRadius: 4, background: cat(x.category).color }} />{x.name} · {x.walk} min

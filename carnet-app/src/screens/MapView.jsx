@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
 import * as maplibregl from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 // MapLibre 6 looks for its worker next to its own module; once bundled, that file isn't there and
@@ -6,13 +6,16 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import mapWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url';
 maplibregl.setWorkerUrl(new URL(mapWorkerUrl, location.href).href);
 import { Icon, CatTag } from '../ui';
-import { cat, useLocation, stayFor, todayISO, walkMin, distM, dayLabel } from '../lib/util';
+import { cat, useLocation, stayFor, todayISO, walkMin, distM, dayLabel, daysBetween, tripNow, hm } from '../lib/util';
+import { useNear, setNear, planAnchor, placeAnchor } from '../lib/near';
+const ItemSheet = lazy(() => import('./DayView').then((m) => ({ default: m.ItemSheet })));
 import { PlacePhoto, PlaceDetail, Votes } from './Places';
 import { useAllRatings } from '../lib/ratings';
 import { getMe } from '../lib/me';
 
 const STYLE = 'https://tiles.openfreemap.org/styles/positron';
 const WALK15 = (15 * 80) / 1.3; // metres you can walk in 15 minutes
+const RINGS = [5, 10, 15].map((m) => [m, (m * 80) / 1.3]);
 
 function circle(c, r) {
   const pts = [];
@@ -53,6 +56,16 @@ function pin(p, { selected, dim }) {
 }
 const LABEL_ZOOM = 14.2;
 
+// A plan on the map: its order in the day, in a dark circle, with its time and name.
+function planPin(n, a, selected) {
+  const el = document.createElement('div');
+  el.className = 'pin pin-on';
+  el.style.cssText = `display:flex;align-items:center;gap:5px;cursor:pointer;z-index:${selected ? 4 : 2}`;
+  el.innerHTML = `<span style="flex:none;width:${selected ? 34 : 28}px;height:${selected ? 34 : 28}px;border-radius:50%;background:#1E1A16;color:#F3EEE6;border:2.5px solid #FAF8F3;box-shadow:0 1px 5px rgba(30,26,22,.4);display:flex;align-items:center;justify-content:center;font:700 13px var(--sans)">${n}</span><span class="pin-label" style="font:600 12px/1.15 var(--sans);color:#1E1A16;background:rgba(250,248,243,.95);padding:2px 6px;border-radius:7px;box-shadow:0 1px 3px rgba(30,26,22,.18);white-space:nowrap;max-width:170px;overflow:hidden;text-overflow:ellipsis"></span>`;
+  el.querySelector('.pin-label').textContent = `${a.start != null ? `${String(Math.floor(a.start / 60)).padStart(2, '0')}:${String(a.start % 60).padStart(2, '0')} ` : ''}${a.name}`;
+  return el;
+}
+
 export default function MapView({ t, places, onClose, focus }) {
   const box = useRef();
   const map = useRef();
@@ -63,6 +76,14 @@ export default function MapView({ t, places, onClose, focus }) {
   const [detail, setDetail] = useState(null);
   const [cat_, setCat] = useState('all');
   const home = t ? stayFor(t.stays, todayISO()) : null;
+  // Places (your list, with its filters) or Plan (a day's plans in order; tap one to see what's near).
+  const nearA = useNear();
+  const days = t?.trip ? daysBetween(t.trip.start_date, t.trip.end_date) : [];
+  const [mode, setMode] = useState('places');
+  const [pday, setPday] = useState(() => (nearA?.day && days.includes(nearA.day) ? nearA.day : days.includes(tripNow().day) ? tripNow().day : days[0]));
+  const [selPlan, setSelPlan] = useState(null);
+  const [openItem, setOpenItem] = useState(null);
+  const dayPlans = mode === 'plan' && t ? t.items.filter((i) => i.day === pday && i.start_time && i.visibility !== 'busy').sort((a, b) => a.start_time.localeCompare(b.start_time)).map((i) => ({ item: i, a: planAnchor(i, places) })).filter((x) => x.a) : [];
   const allPins = [
     ...places.filter((p) => p.lat != null),
     ...(t?.items || []).filter((i) => i.lat != null && !i.place_id && (i.visibility !== 'busy' || i.mine_private)).map((i) => ({ id: i.id, name: i.title, lat: i.lat, lng: i.lng, category: i.category, address: i.address })),
@@ -77,9 +98,9 @@ export default function MapView({ t, places, onClose, focus }) {
   const here = inTown(pos) ? pos : null;
   const homeOk = inTown(home) ? home : null;
   const homeAway = home && !homeOk && allPins.length >= 3;
-  const ref = here || homeOk;
+  const ref = nearA || here || homeOk;
   const near = pins.map((p) => ({ ...p, walk: walkMin(ref, p), d: distM(ref || hub, p) })).sort((a, b) => (a.d ?? 9e9) - (b.d ?? 9e9));
-  const center = here || homeOk || hub || places.find((p) => p.lat != null);
+  const center = nearA || here || homeOk || hub || places.find((p) => p.lat != null);
 
   useEffect(() => {
     map.current = new maplibregl.Map({
@@ -111,6 +132,8 @@ export default function MapView({ t, places, onClose, focus }) {
       m.addSource('walk', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
       m.addLayer({ id: 'walk-fill', type: 'fill', source: 'walk', paint: { 'fill-color': '#E2B36A', 'fill-opacity': 0.1 } });
       m.addLayer({ id: 'walk-line', type: 'line', source: 'walk', paint: { 'line-color': '#9A6418', 'line-width': 1.5, 'line-dasharray': [3, 2] } });
+      m.addSource('route', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+      m.addLayer({ id: 'route-line', type: 'line', source: 'route', layout: { 'line-cap': 'round', 'line-join': 'round' }, paint: { 'line-color': '#1E1A16', 'line-width': 3, 'line-opacity': 0.55, 'line-dasharray': [1, 1.6] } });
     });
     return () => map.current?.remove();
   }, []);
@@ -121,8 +144,14 @@ export default function MapView({ t, places, onClose, focus }) {
     markers.current.forEach((x) => x.remove());
     markers.current = [];
     const far = (p) => ref && distM(ref, p) > WALK15;
+    // In Plan mode the day's plans lead, numbered, with your list faint behind them.
+    dayPlans.forEach(({ item, a }, n) => {
+      const el = planPin(n + 1, a, selPlan === item.id);
+      el.onclick = (e) => { e.stopPropagation(); setSel(null); setSelPlan(item.id); };
+      markers.current.push(new maplibregl.Marker({ element: el, anchor: 'left', offset: [-14, 0] }).setLngLat([a.lng, a.lat]).addTo(m));
+    });
     for (const p of pins) {
-      const el = pin(p, { selected: p.id === sel, dim: far(p) });
+      const el = pin(p, { selected: p.id === sel, dim: mode === 'plan' ? !(nearA && distM(nearA, p) <= WALK15) : far(p) });
       el.onclick = (e) => { e.stopPropagation(); setSel(p.id); };
       // Anchor the circle (not the whole pill) on the spot.
       const size = p.id === sel ? 34 : 26;
@@ -138,9 +167,29 @@ export default function MapView({ t, places, onClose, focus }) {
       markers.current.push(new maplibregl.Marker({ element: h }).setLngLat([homeOk.lng, homeOk.lat]).addTo(m));
     }
     if (here) markers.current.push(new maplibregl.Marker({ element: dot('#1E1A16', 14) }).setLngLat([here.lng, here.lat]).addTo(m));
-    const setWalk = () => m.getSource('walk')?.setData({ type: 'FeatureCollection', features: ref ? [circle(ref, WALK15)] : [] });
+    // What you're looking near: a marker, and rings at 5, 10 and 15 minutes' walk.
+    if (nearA) {
+      const el = document.createElement('div');
+      el.style.cssText = 'width:18px;height:18px;border-radius:50%;background:#4A3F9C;border:3px solid #FAF8F3;box-shadow:0 0 0 2px #4A3F9C55';
+      markers.current.push(new maplibregl.Marker({ element: el }).setLngLat([nearA.lng, nearA.lat]).addTo(m));
+    }
+    const setWalk = () => {
+      m.getSource('walk')?.setData({ type: 'FeatureCollection', features: ref ? (nearA ? RINGS.map(([, r]) => circle(ref, r)) : [circle(ref, WALK15)]) : [] });
+      m.getSource('route')?.setData({ type: 'FeatureCollection', features: dayPlans.length > 1 ? [{ type: 'Feature', geometry: { type: 'LineString', coordinates: dayPlans.map(({ a }) => [a.lng, a.lat]) } }] : [] });
+    };
     m.isStyleLoaded() ? setWalk() : m.once('load', setWalk);
-  }, [pins.length, cat_, here?.lat, here?.lng, homeOk?.id, sel]);
+  }, [pins.length, cat_, here?.lat, here?.lng, homeOk?.id, sel, mode, pday, selPlan, nearA?.lat, nearA?.lng, dayPlans.length]);
+
+  // A new thing to look near, or a day's plans: bring them into view.
+  useEffect(() => {
+    const m = map.current;
+    if (!m) return;
+    if (mode === 'plan' && dayPlans.length) {
+      const lngs = dayPlans.map(({ a }) => a.lng), lats = dayPlans.map(({ a }) => a.lat);
+      if (dayPlans.length === 1) m.flyTo({ center: [lngs[0], lats[0]], zoom: 15 });
+      else m.fitBounds([[Math.min(...lngs), Math.min(...lats)], [Math.max(...lngs), Math.max(...lats)]], { padding: { top: 190, bottom: 240, left: 50, right: 170 }, maxZoom: 15.5 });
+    } else if (nearA) m.flyTo({ center: [nearA.lng, nearA.lat], zoom: 14.6 });
+  }, [mode, pday, nearA?.lat, nearA?.lng]);
 
   useEffect(() => {
     const p = pins.find((x) => x.id === (sel || focus));
@@ -165,17 +214,59 @@ export default function MapView({ t, places, onClose, focus }) {
         <div ref={box} style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }} />
         <div style={{ position: 'absolute', left: 14, right: 14, top: 'calc(env(safe-area-inset-top) + 12px)', display: 'flex', flexDirection: 'column', gap: 8, zIndex: 2 }}>
           <div className="card between" style={{ boxShadow: '0 4px 14px rgba(30,26,22,.08)' }}>
-            <div><div className="k amber">{t?.trip.city || places[0]?.city} · {pins.length} places</div><div className="n" style={{ fontSize: 20 }}>Map</div></div>
-            <button className="icon" aria-label="Close map" onClick={onClose}><Icon n="close" size={18} /></button>
+            <div><div className="k amber">{t?.trip.city || places[0]?.city} · {mode === 'plan' ? `${dayPlans.length} plans` : `${pins.length} places`}</div><div className="n" style={{ fontSize: 20 }}>Map</div></div>
+            <div className="row" style={{ gap: 6 }}>
+              {t?.trip && (
+                <div role="tablist" aria-label="Map shows" className="seg">
+                  {[['places', 'Places'], ['plan', 'Plan']].map(([k, l]) => <button key={k} role="tab" aria-selected={mode === k} className={mode === k ? 'on' : ''} onClick={() => { setMode(k); setSel(null); setSelPlan(null); }}>{l}</button>)}
+                </div>
+              )}
+              <button className="icon" aria-label="Close map" onClick={onClose}><Icon n="close" size={18} /></button>
+            </div>
           </div>
+          {nearA && (
+            <div className="card row" style={{ gap: 8, padding: '8px 12px', background: '#ECEAFA', borderColor: '#DCD8F5', font: '500 13px var(--sans)', color: '#4A3F9C' }}>
+              <span className="grow">Near <b style={{ fontWeight: 600 }}>{nearA.name}</b> · rings at 5, 10, 15 min walk</span>
+              <button aria-label="Stop looking near this" onClick={() => setNear(null)} style={{ background: 'none', border: 0, cursor: 'pointer', display: 'flex' }}><Icon n="close" size={14} color="#4A3F9C" /></button>
+            </div>
+          )}
           {homeAway && <div className="card s" style={{ padding: '8px 12px' }}>Your stay ({home.name}) is pinned {Math.round(distM(hub, home) / 1000)} km from your places, so it’s left off the map. Check its address in the trip settings.</div>}
+          {mode === 'plan' ? (
+            <div className="chips">
+              {days.map((d) => <button key={d} className={'chip' + (pday === d ? ' on' : '')} onClick={() => { setPday(d); setSelPlan(null); }}>{dayLabel(d, { weekday: 'short', day: 'numeric' })}</button>)}
+            </div>
+          ) : (
           <div className="chips">
             {['all', 'eat', 'drink', 'dance', 'coffee', 'explore', 'culture'].map((k) => (
               <button key={k} className={'chip' + (cat_ === k ? ' on' : '')} onClick={() => setCat(k)}>{k === 'all' ? 'All' : cat(k).label}</button>
             ))}
           </div>
+          )}
         </div>
-        {selP ? (
+        {mode === 'plan' && selPlan && (() => {
+          const x = dayPlans.find((d) => d.item.id === selPlan);
+          if (!x) return null;
+          const { item, a } = x;
+          return (
+            <div style={{ position: 'absolute', left: 14, right: 14, bottom: 'calc(env(safe-area-inset-bottom) + 16px)', zIndex: 2 }}>
+              <div className="card" style={{ padding: 0, overflow: 'hidden', boxShadow: '0 6px 20px rgba(30,26,22,.18)' }}>
+                <div className="between" style={{ padding: 12, gap: 10 }}>
+                  <div style={{ minWidth: 0 }}><CatTag c={item.category} extra={`${dayLabel(item.day, { weekday: 'short' })} ${hm(item.start_time)}${item.end_time ? '–' + hm(item.end_time) : ''}`} /><div className="n" style={{ fontSize: 19 }}>{item.title}</div></div>
+                  <button className="icon" aria-label="Close" onClick={() => setSelPlan(null)} style={{ alignSelf: 'flex-start' }}><Icon n="close" size={16} /></button>
+                </div>
+                <div style={{ display: 'flex', borderTop: '1px solid var(--line)' }}>
+                  <button className="btn ghost" style={{ flex: 1.4, border: 0, borderRadius: 0 }} onClick={() => setNear(a)}>What’s near here</button>
+                  <button className="btn ghost" style={{ flex: 1, border: 0, borderLeft: '1px solid var(--line)', borderRadius: 0 }} onClick={() => setOpenItem(item)}>Details</button>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+        {mode === 'plan' && !selPlan ? (
+          <div style={{ position: 'absolute', left: 14, right: 14, bottom: 'calc(env(safe-area-inset-bottom) + 16px)', zIndex: 2 }}>
+            <div className="card s" style={{ padding: '10px 12px' }}>{dayPlans.length ? 'Tap a numbered plan to see what’s near it.' : 'No plans with a spot on the map that day.'}</div>
+          </div>
+        ) : mode === 'plan' ? null : selP ? (
           <div style={{ position: 'absolute', left: 14, right: 14, bottom: 'calc(env(safe-area-inset-bottom) + 16px)', zIndex: 2 }}>
             <div className="card" style={{ padding: 0, overflow: 'hidden', boxShadow: '0 6px 20px rgba(30,26,22,.18)' }}>
               <div style={{ display: 'flex', gap: 12, padding: 12, alignItems: 'center' }}>
@@ -189,8 +280,9 @@ export default function MapView({ t, places, onClose, focus }) {
                 <button className="icon" aria-label="Close" onClick={() => setSel(null)} style={{ alignSelf: 'flex-start' }}><Icon n="close" size={16} /></button>
               </div>
               <div style={{ display: 'flex', borderTop: '1px solid var(--line)' }}>
-                {placeById(selP.id) && <button className="btn ghost" style={{ flex: 1, border: 0, borderRadius: 0 }} onClick={() => setDetail(placeById(selP.id))}>Details</button>}
-                <a className="btn ghost" style={{ flex: 1, border: 0, borderLeft: placeById(selP.id) ? '1px solid var(--line)' : 0, borderRadius: 0, textAlign: 'center', textDecoration: 'none' }}
+                <button className="btn ghost" style={{ flex: 1, border: 0, borderRadius: 0 }} onClick={() => setNear(placeAnchor(selP))}>Near here</button>
+                {placeById(selP.id) && <button className="btn ghost" style={{ flex: 1, border: 0, borderLeft: '1px solid var(--line)', borderRadius: 0 }} onClick={() => setDetail(placeById(selP.id))}>Details</button>}
+                <a className="btn ghost" style={{ flex: 1, border: 0, borderLeft: '1px solid var(--line)', borderRadius: 0, textAlign: 'center', textDecoration: 'none' }}
                   href={/iPhone|iPad|Mac/.test(navigator.userAgent) ? `https://maps.apple.com/?daddr=${selP.lat},${selP.lng}&dirflg=w` : `https://www.google.com/maps/dir/?api=1&destination=${selP.lat},${selP.lng}&travelmode=walking`} target="_blank" rel="noopener">Directions</a>
               </div>
             </div>
@@ -211,6 +303,7 @@ export default function MapView({ t, places, onClose, focus }) {
         </div>
         )}
       </div>
+      {openItem && <Suspense fallback={null}><ItemSheet t={t} me={getMe().email} item={openItem} onClose={() => setOpenItem(null)} /></Suspense>}
       {detail && <PlaceDetail p={detail} t={t?.trip ? t : null} me={getMe().email} tripId={t?.trip?.id} onClose={() => setDetail(null)} />}
     </div>
   );

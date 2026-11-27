@@ -4,6 +4,7 @@ import { loadLocal, startSync, useStore, retryNow, getState, patch } from './lib
 import { googleFill } from './lib/googleFill';
 import { locatePlans } from './lib/locatePlans';
 import { factsFill } from './lib/factsFill';
+import { setNear } from './lib/near';
 import { stayFor, todayISO } from './lib/util';
 import { TabBar, Icon } from './ui';
 import Login from './screens/Login';
@@ -66,6 +67,14 @@ function TripShell({ route, go, me, myId, setRoute }) {
   const t = useTrip(route.tripId, me, myId);
   // Changes refused as proposals while the app wrongly thought you needed approval: apply them now.
   useEffect(() => { recoverOwnProposals(t); }, [t.canEdit, t.trip?.id]);
+  // "See all near this" from a plan's sheet: over to Places (which opens on that plan).
+  useEffect(() => {
+    const on = (e) => go({ tab: e.detail?.tab || 'places' });
+    window.addEventListener('carnet:go', on);
+    return () => window.removeEventListener('carnet:go', on);
+  }, []);
+  // A different trip starts from you again.
+  useEffect(() => () => setNear(null), [t.trip?.id]);
   // Once the trip has synced, let Google finish your unfinished places and add missing photos.
   const placeCount = t.places?.length || 0;
   useEffect(() => {
