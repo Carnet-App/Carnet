@@ -22,6 +22,7 @@ export function buildDay({ items, day, home, now, places, minGap = 45 }) {
   let cursor = Math.max(9 * 60, isToday ? now.min : 0);
   let prevLoc = home;
   let prevName = home?.name ? home.name : 'where you’re staying';
+  let prevItem = null;
   // Last night's plans that run past midnight into this morning come first, and the morning's
   // free time starts after them.
   const yday = prevDay(day);
@@ -30,19 +31,24 @@ export function buildDay({ items, day, home, now, places, minGap = 45 }) {
     rows.push({ kind: 'item', item: it.i, start: it.s.start - DAY, end: it.s.end - DAY, fromYesterday: true });
     cursor = Math.max(cursor, it.s.end - DAY);
   }
+  // A plan made from a place in the guide can sit where that place is pinned.
+  const placeById = new Map((places || []).map((p) => [p.id, p]));
   for (const it of list) {
     const { start, end } = span(it);
-    const loc = it.lat != null ? { lat: it.lat, lng: it.lng } : null;
+    const pl = it.place_id ? placeById.get(it.place_id) : null;
+    const loc = it.lat != null ? { lat: it.lat, lng: it.lng } : pl?.lat != null ? { lat: pl.lat, lng: pl.lng } : null;
     const travel = walkMin(prevLoc, loc);
     const freeEnd = start - (travel || 0);
-    if (freeEnd - cursor >= minGap) rows.push({ ...gapRow(cursor, freeEnd, prevLoc, places, items), before: prevLoc && { ...prevLoc, name: prevName }, after: loc && { ...loc, name: it.title } });
+    if (freeEnd - cursor >= minGap) rows.push({ ...gapRow(cursor, freeEnd, prevLoc || loc, places, items), before: prevLoc && { ...prevLoc, name: prevName }, after: loc && { ...loc, name: it.title }, prev: prevItem });
     if (rows.length && travel) rows.push({ kind: 'travel', minutes: travel, to: it });
     rows.push({ kind: 'item', item: it, start, end });
     cursor = Math.max(cursor, end);
-    if (loc) { prevLoc = loc; prevName = it.title; }
+    // Where you'll be next is this plan's spot. A plan with no spot on the map leaves that
+    // unknown, rather than suggesting places near something earlier in the day.
+    prevLoc = loc; prevName = it.title; prevItem = it;
   }
   // Free time to the end of the evening, unless the night is already taken up past midnight.
-  if (DAY - cursor >= 120) rows.push({ ...gapRow(cursor, DAY, prevLoc, places, items, true), before: prevLoc && { ...prevLoc, name: prevName }, after: null });
+  if (DAY - cursor >= 120) rows.push({ ...gapRow(cursor, DAY, prevLoc, places, items, true), before: prevLoc && { ...prevLoc, name: prevName }, after: null, prev: prevItem });
   return { rows, loose };
 }
 

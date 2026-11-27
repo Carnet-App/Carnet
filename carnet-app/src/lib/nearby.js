@@ -16,6 +16,48 @@ export function kindFor(minute) {
 }
 export const KIND_WORDS = { eat: 'Somewhere to eat', drink: 'For a drink', coffee: 'For a coffee' };
 
+// What a day's food and drink plans already cover: breakfast (a coffee, or eating before 11),
+// lunch (eating 11:00–16:30) and dinner (eating from 17:30).
+export function mealsOn(items = []) {
+  const out = { breakfast: false, lunch: false, dinner: false };
+  for (const i of items) {
+    if (!i.start_time) continue;
+    const [h, m] = i.start_time.split(':').map(Number);
+    const t = h * 60 + (m || 0);
+    if (i.category === 'coffee' && t < 16 * 60) out.breakfast = true;
+    if (i.category === 'eat') {
+      if (t < 11 * 60) out.breakfast = true;
+      else if (t <= 16.5 * 60) out.lunch = true;
+      else if (t >= 17.5 * 60) out.dinner = true;
+    }
+  }
+  return out;
+}
+
+// What to suggest for free time starting at `minute`, given the rest of the day: lunch if there's
+// been a coffee but no lunch yet, not a second brunch; dinner if none is planned; otherwise a drink.
+export function kindForDay(minute, dayItems = [], prev = null) {
+  const h = (minute % 1440) / 60;
+  const done = mealsOn(dayItems);
+  if (h >= 3 && h < 7) return null;
+  if (h >= 7 && h < 11) return done.breakfast && !done.lunch && h >= 10.5 ? 'eat' : done.breakfast ? null : 'coffee';
+  if (h >= 11 && h < 16) return !done.lunch ? 'eat' : prev === 'coffee' ? null : 'coffee';
+  if (h >= 16 && h < 18) {
+    if (!done.lunch && h < 16.5) return 'eat';
+    if (h >= 17 || prev === 'coffee') return 'drink';
+    return 'coffee';
+  }
+  if (h >= 18 && h < 22) return !done.dinner ? 'eat' : 'drink';
+  return 'drink';
+}
+
+// The heading for a suggestion: "For lunch", "For a late lunch", "For dinner"…
+export function kindWords(kind, minute) {
+  const h = (minute % 1440) / 60;
+  if (kind === 'eat') return h < 11 ? 'For breakfast' : h < 14.5 ? 'For lunch' : h < 17.5 ? 'For a late lunch' : 'For dinner';
+  return KIND_WORDS[kind] || 'Somewhere';
+}
+
 const DAY = 864e5;
 const memo = new Map();
 const keyOf = (near, kind) => `${kind}:${near.lat.toFixed(3)},${near.lng.toFixed(3)}`;

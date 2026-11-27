@@ -2,6 +2,7 @@ import { useEffect, useState, lazy, Suspense } from 'react';
 import { supabase } from './lib/supabase';
 import { loadLocal, startSync, useStore, retryNow, getState, patch } from './lib/store';
 import { googleFill } from './lib/googleFill';
+import { locatePlans } from './lib/locatePlans';
 import { stayFor, todayISO } from './lib/util';
 import { TabBar, Icon } from './ui';
 import Login from './screens/Login';
@@ -76,6 +77,11 @@ function TripShell({ route, go, me, myId, setRoute }) {
       const stay = stayFor(t.stays || [], todayISO());
       const centre = pins.length >= 3 ? { lat: mid(pins.map((p) => p.lat)), lng: mid(pins.map((p) => p.lng)) } : stay ? { lat: stay.lat, lng: stay.lng } : pins[0] || null;
       googleFill(places, { myId, city, centre, save: (id, f) => patch('places', id, f) }).catch(() => {});
+      // Plans typed in by hand get a spot on the map, so the day knows what's near them.
+      if (t.canEdit) {
+        const items = Object.values(getState().items).filter((i) => i.trip_id === t.trip.id && i.day);
+        locatePlans(items, { places, city, centre, save: (id, f) => patch('items', id, f) }).catch(() => {});
+      }
     }, 5000);
     return () => clearTimeout(timer);
   }, [t.trip?.id, myId, placeCount]);

@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { kindFor, KIND_WORDS, fetchNearby, fresh, dismiss, catOf, fromYourList } from '../lib/nearby';
+import { kindFor, kindForDay, kindWords, fetchNearby, fresh, dismiss, catOf, fromYourList } from '../lib/nearby';
 import { lengthFor } from '../lib/slots';
 import { upsert, uid } from '../lib/store';
 import { getMe } from '../lib/me';
@@ -17,6 +17,9 @@ export default function DayView({ t, me, day, pos }) {
   const home = stayFor(t.stays, day);
   const now = tripNow();
   const { rows, loose } = buildDay({ items: t.items, day, home: (day === now.day && pos) || home, now, places: t.places });
+  // What each free slot is for, knowing the rest of the day (lunch after a coffee, not more brunch).
+  const dayItems = t.items.filter((i) => i.day === day);
+  const kindAt = (r) => kindForDay(r.from, dayItems, r.prev?.category);
 
   return (
     <div className="col" style={{ gap: 6 }}>
@@ -25,13 +28,14 @@ export default function DayView({ t, me, day, pos }) {
           return (
             <div key={i} className="tr"><Icon n="walk" size={12} w={2} />{r.minutes} min walk</div>
           );
-        if (r.kind === 'gap')
+        if (r.kind === 'gap') {
+          const k = kindAt(r);
           return (
             <div key={i} className="tl">
               <div className="tm">{fromMin(r.from)}</div>
               <div className="it" role="button" tabIndex={0} onClick={() => setSlot(r)} style={{ background: 'transparent', border: '1.5px dashed #C9A96E', cursor: 'pointer', minWidth: 0, overflow: 'hidden' }}>
                 <div className="between"><div className="k amber">{r.open ? 'Free from here' : `Free · ${dur(r.minutes)}`}</div><span className="s" style={{ color: '#8A5A14', fontWeight: 600 }}>Fill it ›</span></div>
-                {(() => { const k = kindFor(r.from); const mine = r.near ? fromYourList(t.places, t.items, r.near, { kind: k, max: 3, maxWalk: 20, foodOnly: false }) : []; r.ideas = mine.length ? mine : r.ideas; return null; })()}
+                {(() => { const mine = r.near ? fromYourList(t.places, t.items, r.near, { kind: k, max: 3, maxWalk: 20, foodOnly: false }) : []; r.ideas = mine.length ? mine : r.ideas; return null; })()}
                 {r.ideas.length ? (
                   <div className="col" style={{ gap: 6, marginTop: 4 }}>
                     {r.ideas.map((p) => (
@@ -43,15 +47,16 @@ export default function DayView({ t, me, day, pos }) {
                     ))}
                   </div>
                 ) : null}
-                {r.minutes >= 60 && r.near && day >= now.day && kindFor(r.from) && (
-                  <div onClick={(e) => e.stopPropagation()}><Nearby near={r.near} kind={kindFor(r.from)} guide={t.places} few={r.ideas.length === 0}
+                {r.minutes >= 60 && r.near && day >= now.day && k && (
+                  <div onClick={(e) => e.stopPropagation()}><Nearby near={r.near} kind={k} words={kindWords(k, r.from)} guide={t.places} few={r.ideas.length === 0}
                     onAdd={(s) => setEdit({ preset: { title: s.name, lat: s.lat, lng: s.lng, address: s.address, category: catOf(s), day, start_time: fromMin(r.from + (walkMin(r.near, s) || 0)) } })}
                     onSave={(s) => upsert('places', { id: uid(), owner: getMe().id, city: t.trip.city, name: s.name, lat: s.lat, lng: s.lng, address: s.address, category: catOf(s), source: 'osm', source_detail: 'suggested nearby', link: s.website || null, notes: [s.cuisine, s.hours].filter(Boolean).join(' · ') || null })} /></div>
                 )}
-                {!r.ideas.length && !(r.minutes >= 60 && r.near && day >= now.day && kindFor(r.from)) && <div className="s">Tap to see what's near your plans.</div>}
+                {!r.ideas.length && !(r.minutes >= 60 && r.near && day >= now.day && k) && <div className="s">{r.near ? 'Tap to see what’s near your plans.' : 'Tap to see ideas. Give the plans around it a place on the map and suggestions will be nearby.'}</div>}
               </div>
             </div>
           );
+        }
         const it = r.item;
         const busyOther = it.visibility === 'busy' && !it.mine_private;
         const c = cat(it.category);
@@ -109,7 +114,7 @@ export default function DayView({ t, me, day, pos }) {
 
 // Places nearby that aren't in your guide yet, for this free time: a few, best-described first.
 // Save one to the guide, put it on the plan here, or wave it away.
-function Nearby({ near, kind, guide, few, onAdd, onSave }) {
+function Nearby({ near, kind, words, guide, few, onAdd, onSave }) {
   const [list, setList] = useState(null);
   const [gone, setGone] = useState(0);
   const [saved, setSaved] = useState({});
@@ -120,13 +125,13 @@ function Nearby({ near, kind, guide, few, onAdd, onSave }) {
     fetchNearby(near, kind).then((l) => on && setList(l));
     return () => { on = false; };
   }, [open, near.lat, near.lng, kind]);
-  if (!open) return <button className="link" style={{ alignSelf: 'flex-start', marginTop: 6, fontSize: 13 }} onClick={() => setOpen(true)}>{KIND_WORDS[kind]} nearby?</button>;
+  if (!open) return <button className="link" style={{ alignSelf: 'flex-start', marginTop: 6, fontSize: 13 }} onClick={() => setOpen(true)}>{words} nearby?</button>;
   if (!navigator.onLine) return null;
   const shown = list ? fresh(list, guide).slice(0, 3) : [];
   if (list && !shown.length) return null;
   return (
     <div className="col" style={{ gap: 6, marginTop: 8, paddingTop: 8, borderTop: '1px dashed #E3D3B4' }} data-gone={gone}>
-      <div className="s" style={{ fontWeight: 600, color: '#8A5A14' }}>{KIND_WORDS[kind]} nearby · not in your guide</div>
+      <div className="s" style={{ fontWeight: 600, color: '#8A5A14' }}>{words} nearby · not in your guide</div>
       {!list && <div className="s">Looking around…</div>}
       {shown.map((s) => (
         <div key={s.osm} className="row" style={{ gap: 8, alignItems: 'flex-start' }}>
@@ -152,7 +157,7 @@ const SIGHTS = new Set(['culture', 'explore', 'dance', 'other']);
 function NearThis({ t, it, day, today, onPick }) {
   if (!SIGHTS.has(it.category) || it.lat == null || day < today) return null;
   const end = span(it).end;
-  const list = fromYourList(t.places, t.items, it, { kind: kindFor(end % 1440), max: 3, maxWalk: 15 });
+  const list = fromYourList(t.places, t.items, it, { kind: kindForDay(end, t.items.filter((i) => i.day === day), it.category), max: 3, maxWalk: 15 });
   if (!list.length) return null;
   return (
     <div className="row" style={{ marginLeft: 56, gap: 6, flexWrap: 'wrap', alignItems: 'center' }}>
@@ -170,7 +175,7 @@ function NearThis({ t, it, day, today, onPick }) {
 // Tapping free time: what's near the plans either side of it — your own list first, for what suits
 // the time, then (if you want more) places nearby that aren't in your guide yet.
 function FreeSlot({ t, day, r, onClose, onAdd }) {
-  const [kind, setKind] = useState(kindFor(r.from) || 'eat');
+  const [kind, setKind] = useState(kindForDay(r.from, t.items.filter((i) => i.day === day), r.prev?.category) || 'any');
   const [more, setMore] = useState(false);
   const [osm, setOsm] = useState(null);
   const [saved, setSaved] = useState({});
