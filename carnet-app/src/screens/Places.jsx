@@ -276,6 +276,7 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
   const [link, setLink] = useState(initial.link || '');
   const [matches, setMatches] = useState(null);
   const [msg, setMsg] = useState('');
+  const [naming, setNaming] = useState(false);
   const ownsIt = !p.owner || !getMe().id || p.owner === getMe().id;
   // Only the person who added a place can change its details (the server holds to that too).
   const save = (patch) => { const n = { ...p, ...patch }; setP(n); if (ownsIt) upsert('places', { id: p.id, ...patch }); else setMsg('Only the person who added this place can change its details — your rating below is yours to set.'); };
@@ -291,10 +292,22 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
       else setMsg('That site doesn’t publish a preview image.');
     } catch { setMsg('Couldn’t reach that site.'); }
   }
-  async function check() {
+  async function check(name = p.name) {
     setMsg('Looking it up…');
-    setMatches(await findVenue(`${p.name} ${p.city}`, null, null, { google: true, fillNames: true, name: p.name, city: p.city }).catch(() => []));
+    setMatches(await findVenue(`${name} ${p.city}`, null, null, { google: true, fillNames: true, name, city: p.city }).catch(() => []));
     setMsg('');
+  }
+  // A misread name ("Maya" for "Maiya") is often why nothing matches: fix it, then look again.
+  const items = useStore((s) => s.items);
+  function rename(next) {
+    setNaming(false);
+    const name = next.trim();
+    if (!name || name === p.name) return;
+    const old = p.name;
+    save({ name });
+    // The plan entries made from this place still carry the old spelling: bring them along.
+    if (t?.canEdit) Object.values(items || {}).filter((i) => i.place_id === p.id && i.title === old).forEach((i) => upsert('items', { ...i, title: name }));
+    if (unfinished(p)) check(name);
   }
 
   return (
@@ -305,7 +318,18 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
       </div>
       <div>
         <CatTag c={p.category} extra={p.source_detail || ''} />
-        <h2 className="h2" style={{ marginTop: 4 }}>{p.name}</h2>
+        {naming ? (
+          <form className="row" style={{ gap: 8, marginTop: 4 }} onSubmit={(e) => { e.preventDefault(); rename(e.target.elements.name.value); }}>
+            <input name="name" className="in grow" defaultValue={p.name} autoFocus aria-label="Name" style={{ fontSize: 18 }} />
+            <button className="btn sm">Save</button>
+            <button type="button" className="btn sm ghost" onClick={() => setNaming(false)}>Cancel</button>
+          </form>
+        ) : (
+          <div className="row" style={{ gap: 8, marginTop: 4, alignItems: 'baseline' }}>
+            <h2 className="h2 grow" style={{ margin: 0 }}>{p.name}</h2>
+            {ownsIt && <button className="link mute" style={{ fontSize: 13.5 }} onClick={() => setNaming(true)}>Edit name</button>}
+          </div>
+        )}
         <div className="s">{p.address || 'No address yet'}</div>
       </div>
       {t && <AddToPlan t={t} me={me} p={p} onEdit={setEditItem} />}
@@ -331,7 +355,7 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
           {ownsIt ? (
             <div className="row" style={{ gap: 8 }}>
               <button className="btn sm grow" onClick={() => setPinning(true)}><Icon n="pin" size={16} color="#F3EEE6" />Pin it on the map</button>
-              <button className="btn sm ghost grow" onClick={check}>Find it by name</button>
+              <button className="btn sm ghost grow" onClick={() => check()}>Find it by name</button>
             </div>
           ) : <div className="s">Only the person who added it can finish it.</div>}
           {matches?.map((m, i) => (
@@ -339,7 +363,7 @@ export function PlaceDetail({ p: initial, onClose, tripId, t, me }) {
               <div className="n">{m.name}</div><div className="s">{m.address}</div>
             </button>
           ))}
-          {matches && !matches.length && <div className="s">No match by name. Pin it on the map instead.</div>}
+          {matches && !matches.length && <div className="s">No match for “{p.name}”. Is the spelling right? <button className="link" onClick={() => setNaming(true)}>Edit the name</button>, or pin it on the map instead.</div>}
         </div>
       )}
       <div className="chips">
