@@ -33,7 +33,9 @@ export function pickGoogle(p, results, { city, centre } = {}) {
   if (!p.address && best.address) out.address = best.address;
   if (!p.category && best.osm_value) out.category = guessCategory(best.osm_value, best.name);
   if (noPhoto(p) && best.google_id) out.photo_url = `/api/gphoto?id=${encodeURIComponent(best.google_id)}`;
-  return Object.keys(out).length ? out : null;
+  if (!Object.keys(out).length) return null;
+  if (best.google_id && !p.google_id) out.google_id = best.google_id; // so hours and price can follow
+  return out;
 }
 
 // ── Remembering what's been tried, and today's spend, on this phone ──

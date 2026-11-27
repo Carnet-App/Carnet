@@ -45,6 +45,20 @@ export async function loadLocal() {
 // Money rows carry a revision: each write says which revision it was based on and an operation
 // id, so the server can refuse a stale overwrite and ignore a job it has already applied.
 const VERSIONED = new Set(['expenses', 'settlements']);
+// Columns added by later database scripts. Until a script has run, the server refuses a row that
+// carries them: send the rest; the full row stays on this phone and goes up once the column exists.
+const NEWER = {
+  items: ['tickets', 'photos', 'alternatives'],
+  places: ['cuisine', 'price_level', 'price_text', 'hours', 'facts_src', 'google_id'],
+};
+function withoutNewer(table, row, error) {
+  // The server names only the first column it doesn't know, so if it names any of them, hold all.
+  const msg = error?.message || '';
+  if (!NEWER[table].some((k) => msg.includes(k))) return row;
+  const rest = { ...row };
+  for (const k of NEWER[table]) delete rest[k];
+  return rest;
+}
 let inFlight = null; // the job being sent right now
 
 function enqueue(job) {
@@ -148,15 +162,21 @@ async function send(job) {
     return supabase.storage.from('captures').upload(job.id, blob, { contentType: blob.type || job.contentType, upsert: true });
   }
   if (job.op === 'delete') return supabase.from(job.table).delete().eq('id', job.id);
-  if (job.op === 'update') return supabase.from(job.table).update(job.fields).eq('id', job.id);
+  if (job.op === 'update') {
+    const res = await supabase.from(job.table).update(job.fields).eq('id', job.id);
+    if (res.error && NEWER[job.table]) {
+      const rest = withoutNewer(job.table, job.fields, res.error);
+      if (Object.keys(rest).length < Object.keys(job.fields).length) return Object.keys(rest).length > 1 ? supabase.from(job.table).update(rest).eq('id', job.id) : { error: null };
+    }
+    return res;
+  }
   const row = clean(job.table, job.row);
   if (!VERSIONED.has(job.table)) {
     const res = await supabase.from(job.table).upsert(row);
     // Newer columns (tickets, photos) the server may not have yet, until its database script runs:
     // send the rest; the full lists stay on this phone and go up once the column exists.
-    if (res.error && job.table === 'items') {
-      const rest = { ...row };
-      for (const k of ['tickets', 'photos', 'alternatives']) if (k in rest && new RegExp(k).test(res.error.message || '')) delete rest[k];
+    if (res.error && NEWER[job.table]) {
+      const rest = withoutNewer(job.table, row, res.error);
       if (Object.keys(rest).length < Object.keys(row).length) return supabase.from(job.table).upsert(rest);
     }
     return res;

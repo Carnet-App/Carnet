@@ -10,10 +10,23 @@ import { buildDay } from '../lib/schedule';
 import { cat, hm, fromMin, dur, stayFor, tripNow, nameOf, dayLabel } from '../lib/util';
 import { span } from '../lib/schedule';
 import ItemEditor from './ItemEditor';
+import { PlaceDetail } from './Places';
+import { VisitSheet } from './VisitBlock';
+
+// A plan, opened: the same sheet as in Places, leading with this visit; a plan that isn't a place
+// (a train, "Pack") gets just the visit.
+export function ItemSheet({ t, me, item, onClose }) {
+  const it = t.items.find((i) => i.id === item.id) || item;
+  const place = it.place_id ? t.places.find((p) => p.id === it.place_id) : null;
+  return place
+    ? <PlaceDetail p={place} item={it} t={t} me={me} tripId={t.trip.id} onClose={onClose} />
+    : <VisitSheet t={t} me={me} item={it} onClose={onClose} />;
+}
 
 export default function DayView({ t, me, day, pos }) {
   const [edit, setEdit] = useState(null);
   const [slot, setSlot] = useState(null);
+  const [open, setOpen] = useState(null);
   const home = stayFor(t.stays, day);
   const now = tripNow();
   const { rows, loose } = buildDay({ items: t.items, day, home: (day === now.day && pos) || home, now, places: t.places });
@@ -65,7 +78,7 @@ export default function DayView({ t, me, day, pos }) {
           <div key={(r.fromYesterday ? 'y' : '') + it.id} className="col" style={{ gap: 4 }}>
             <div className="tl">
             <div className="tm">{r.fromYesterday ? '00:00' : hm(it.start_time)}</div>
-            <button className="it" style={st} onClick={() => !busyOther && setEdit({ item: it })} disabled={busyOther}>
+            <button className="it" style={st} onClick={() => !busyOther && setOpen(it)} disabled={busyOther}>
               {busyOther ? (
                 <><div className="k mute">Busy</div><div className="n">{nameOf(t.members, it.created_by_email)} has something on</div></>
               ) : (
@@ -98,7 +111,7 @@ export default function DayView({ t, me, day, pos }) {
         <>
           <div className="k mute" style={{ marginTop: 8 }}>Sometime this day</div>
           {loose.map((it) => (
-            <button key={it.id} className="card between" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => setEdit({ item: it })}>
+            <button key={it.id} className="card between" style={{ textAlign: 'left', cursor: 'pointer' }} onClick={() => setOpen(it)}>
               <span><CatTag c={it.category} /><div className="n">{it.title}</div></span><Icon n="pen" size={16} />
             </button>
           ))}
@@ -108,6 +121,7 @@ export default function DayView({ t, me, day, pos }) {
       {slot && <FreeSlot t={t} day={day} r={slot} onClose={() => setSlot(null)}
         onAdd={(p, at) => { setSlot(null); setEdit({ preset: { title: p.name, place_id: p.id && !p.osm ? p.id : undefined, lat: p.lat, lng: p.lng, address: p.address, category: p.category || catOf(p), day, start_time: at } }); }} />}
       {edit && <ItemEditor t={t} me={me} item={edit.item} preset={edit.preset} onClose={() => setEdit(null)} />}
+      {open && <ItemSheet t={t} me={me} item={open} onClose={() => setOpen(null)} />}
     </div>
   );
 }

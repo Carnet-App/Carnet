@@ -27,6 +27,10 @@ const P = {
   check: <path d="M5 12l5 5 9-10" />,
   search: <><circle cx="11" cy="11" r="6" /><path d="M20 20l-4-4" /></>,
   arrow: <path d="M5 12h14M13 6l6 6-6 6" />,
+  ticket: <><rect x="3" y="3" width="7" height="7" /><rect x="14" y="3" width="7" height="7" /><rect x="3" y="14" width="7" height="7" /><path d="M14 14h3v3M21 14v7h-7" /></>,
+  nav: <path d="M3 11 21 3l-8 18-2-8z" />,
+  globe: <><circle cx="12" cy="12" r="9" /><path d="M3 12h18M12 3c3 3 3 15 0 18M12 3c-3 3-3 15 0 18" /></>,
+  share: <path d="M12 3v12M7 8l5-5 5 5M5 15v5h14v-5" />,
   trash: <path d="M5 7h14M10 7V4h4v3M7 7l1 13h8l1-13" />,
   receipt: <path d="M6 3h12v18l-3-2-3 2-3-2-3 2zM9 8h6M9 12h6M9 16h3" />,
 };

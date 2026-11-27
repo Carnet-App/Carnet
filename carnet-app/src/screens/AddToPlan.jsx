@@ -5,6 +5,17 @@ import { needsApproval, propose, announce } from '../lib/proposals';
 import { PARTS, freeSlot, partSummary, lengthFor, busyOn } from '../lib/slots';
 import { FOOD_DRINK, withAlt, backupIndex, altsOf, rankLabel } from '../lib/alts';
 
+// The part of the day a place suits: by kind, unless its hours say it's shut then (Maiya opens at
+// 19:00, so not the afternoon).
+function partFor(p, day) {
+  const guess = p.category === 'coffee' ? 'morning' : ['drink', 'dance'].includes(p.category) ? 'evening' : 'afternoon';
+  if (!p.hours?.periods?.length || !day) return guess;
+  const d = (new Date(day + 'T12:00:00').getDay() + 6) % 7;
+  const openIn = (part) => p.hours.periods.some(([pd, a, b]) => pd === d && a < part.to && b > part.from);
+  const order = [guess, ...PARTS.map((x) => x.key).filter((k) => k !== guess)];
+  return order.find((k) => openIn(PARTS.find((x) => x.key === k))) || guess;
+}
+
 // Put a place on the trip from the place itself: a day, a part of the day (or an exact time),
 // with a look at what's already there. Once it's on, a single line says when, with Change.
 export default function AddToPlan({ t, me, p, onEdit, compact, onDone }) {
@@ -12,7 +23,7 @@ export default function AddToPlan({ t, me, p, onEdit, compact, onDone }) {
   const days = daysBetween(t.trip.start_date, t.trip.end_date);
   const today = tripNow().day;
   const [day, setDay] = useState(() => item?.day || days.find((d) => d >= today) || days[0] || null);
-  const [part, setPart] = useState(p.category === 'coffee' ? 'morning' : ['drink', 'dance'].includes(p.category) ? 'evening' : 'afternoon');
+  const [part, setPart] = useState(() => partFor(p, item?.day || days.find((d) => d >= today) || days[0]));
   const [exact, setExact] = useState('');
   const [done, setDone] = useState('');
   const mins = lengthFor(p.category);

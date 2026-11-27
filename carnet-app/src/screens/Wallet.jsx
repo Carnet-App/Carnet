@@ -99,7 +99,7 @@ function Pass({ p, t, me, onOpen, onEdit, small }) {
   );
 }
 
-function FullPass({ p, start = 0, onClose }) {
+export function FullPass({ p, start = 0, onClose }) {
   const list = ticketsOf(p);
   const [i, setI] = useState(start);
   const k = list[Math.min(i, list.length - 1)];

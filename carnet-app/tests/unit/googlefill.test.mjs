@@ -22,7 +22,7 @@ test('a pinned place only takes a photo from a Google place right where the pin 
   const p = { name: 'Le Syndicat', lat: 48.8712, lng: 2.3553, address: 'x', category: 'drink' };
   assert.equal(pickGoogle(p, [g('Le Syndicat', 48.80, 2.30)], { city: 'Paris', centre }), null);
   const f = pickGoogle(p, [g('Le Syndicat', 48.8713, 2.3554)], { city: 'Paris', centre });
-  assert.deepEqual(Object.keys(f), ['photo_url']);
+  assert.deepEqual(Object.keys(f).sort(), ['google_id', 'photo_url']);
 });
 test('a place with its own photo keeps it', () => {
   const f = pickGoogle({ name: 'Stolen Moon', lat: null, photo_path: 'a.jpg' }, [g('Stolen Moon', 48.861, 2.36)], { city: 'Paris', centre });

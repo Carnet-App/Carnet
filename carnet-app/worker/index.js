@@ -147,12 +147,35 @@ async function nearby(url) {
   return json({ places }, 200, { 'cache-control': 'public, max-age=86400' });
 }
 
+// What the map says about the named places right at a spot: cuisine and opening hours, for
+// filling in places already saved (the app matches the name). Free.
+async function osmFacts(url) {
+  const lat = +url.searchParams.get('lat'), lng = +url.searchParams.get('lng');
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return json({ error: 'lat and lng' }, 400);
+  const q = `[out:json][timeout:10];nwr(around:80,${lat.toFixed(5)},${lng.toFixed(5)})["name"]["amenity"];out center tags 40;nwr(around:80,${lat.toFixed(5)},${lng.toFixed(5)})["name"]["tourism"];out center tags 20;`;
+  for (const host of NEARBY_HOSTS) {
+    try {
+      const res = await fetch(host, { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': UA }, body: 'data=' + encodeURIComponent(q) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      const places = (data.elements || []).map((e) => {
+        const t = e.tags || {};
+        return { name: t.name, cuisine: t.cuisine || null, hours: t.opening_hours || null, website: t.website || t['contact:website'] || null, amenity: t.amenity || t.tourism || null };
+      }).filter((p) => p.name && (p.cuisine || p.hours));
+      return json({ places }, 200, { 'cache-control': 'public, max-age=604800' });
+    } catch {}
+  }
+  return json({ places: [], error: 'map data unavailable' }, 200);
+}
+
 // ── Google: a safety net on spending ──────────────────────────────────
 // Google's free allowance is monthly (resets on the 1st, Pacific time). These caps keep Carnet
 // just under it, across everyone's phones, until (and as well as) caps are set in Google Cloud.
 // One "photo" is one picture fetched from Google (a details call plus the image); a picture
 // already cached at Cloudflare costs nothing and isn't counted.
-export const GOOGLE_CAPS = { search: { day: 160, month: 4800 }, photo: { day: 32, month: 950 } };
+// "details" is opening hours and price for a place already matched: Google's pricier tier, with a
+// smaller free allowance, so it gets its own, lower cap.
+export const GOOGLE_CAPS = { search: { day: 160, month: 4800 }, photo: { day: 32, month: 950 }, details: { day: 30, month: 900 } };
 const pacific = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
 
 // The counter lives in one small Durable Object so every phone and server shares it.
@@ -248,6 +271,28 @@ async function googlePhoto(url, env, ctx) {
   const img = await fetch(`https://places.googleapis.com/v1/${name}/media?maxWidthPx=640&key=${env.GOOGLE_KEY}`);
   if (!img.ok) return new Response('none', { status: 404, headers: { 'cache-control': 'no-store' } });
   const res = new Response(img.body, { headers: { 'content-type': img.headers.get('content-type') || 'image/jpeg', 'cache-control': 'public, max-age=604800' } });
+  if (edge) { const put = edge.put(key, res.clone()); ctx?.waitUntil ? ctx.waitUntil(put) : await put; }
+  return res;
+}
+
+// Opening hours and price level for a place Google has already matched. Asked once per place by
+// the app; kept at Cloudflare for a month so a second phone asking costs nothing.
+async function googleFacts(url, env, ctx) {
+  if (!env.GOOGLE_KEY) return json({ error: 'no google key' }, 404);
+  const id = url.searchParams.get('id');
+  if (!id || !/^[\w-]{10,300}$/.test(id)) return json({ error: 'id' }, 400);
+  const edge = typeof caches !== 'undefined' ? caches.default : null;
+  const key = new Request(`https://${url.host}/api/gfacts?id=${encodeURIComponent(id)}`);
+  const hit = edge && (await edge.match(key));
+  if (hit) return hit;
+  if (!(await takeGoogle(env, 'details'))) return json({ error: 'limit' }, 429);
+  const r = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, {
+    headers: { 'X-Goog-Api-Key': env.GOOGLE_KEY, 'X-Goog-FieldMask': 'regularOpeningHours,priceLevel' },
+  });
+  if (!r.ok) return json({ error: 'google ' + r.status }, 502);
+  const d = await r.json();
+  const LEVEL = { PRICE_LEVEL_INEXPENSIVE: 1, PRICE_LEVEL_MODERATE: 2, PRICE_LEVEL_EXPENSIVE: 3, PRICE_LEVEL_VERY_EXPENSIVE: 4 };
+  const res = json({ hours: d.regularOpeningHours || null, price_level: LEVEL[d.priceLevel] || null }, 200, { 'cache-control': 'public, max-age=2592000' });
   if (edge) { const put = edge.put(key, res.clone()); ctx?.waitUntil ? ctx.waitUntil(put) : await put; }
   return res;
 }
@@ -433,6 +478,11 @@ export default {
         case '/api/google':
           if (!(await signedIn(req, env))) return json({ error: 'sign in' }, 401);
           return google(url, env);
+        case '/api/osmfacts':
+          return osmFacts(url);
+        case '/api/gfacts':
+          if (!(await signedIn(req, env))) return json({ error: 'sign in' }, 401);
+          return googleFacts(url, env, ctx);
         case '/api/gphoto':
           return googlePhoto(url, env, ctx);
         case '/api/transit':

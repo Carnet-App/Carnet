@@ -64,7 +64,7 @@ textarea.in { height: 80px; padding: 10px 12px; resize: vertical; }
 .fab { position: fixed; right: 20px; bottom: calc(88px + var(--safe-b)); width: 58px; height: 58px; border-radius: 50%; background: var(--ink); border: 0; display: flex; align-items: center; justify-content: center; box-shadow: 0 6px 18px rgba(30,26,22,.25); z-index: 21; cursor: pointer; }
 
 .sheet-back { position: fixed; inset: 0; background: rgba(30,26,22,.32); z-index: 40; display: flex; align-items: flex-end; justify-content: center; }
-.sheet { background: var(--bg); width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; border-radius: 24px 24px 0 0; padding: 10px 20px calc(24px + var(--safe-b)); display: flex; flex-direction: column; gap: 12px; animation: up .22s ease; }
+.sheet { position: relative; background: var(--bg); width: 100%; max-width: 560px; max-height: 92vh; overflow: auto; border-radius: 24px 24px 0 0; padding: 10px 20px calc(24px + var(--safe-b)); display: flex; flex-direction: column; gap: 12px; animation: up .22s ease; }
 .sheet.full { max-height: 100vh; height: 100vh; max-height: 100dvh; height: 100dvh; border-radius: 0; padding-top: calc(var(--safe-t) + 14px); }
 /* Roomier layout for screens you read and decide on (capture, review). */
 .sheet.roomy { gap: 22px; padding-left: 22px; padding-right: 22px; }
@@ -121,3 +121,11 @@ input.in[type='time']::-webkit-date-and-time-value, input.in[type='date']::-webk
 /* Map pins: names only when zoomed in (or for the picked one), so they don't pile up. */
 .pin .pin-label { display: none; }
 .map-labels .pin .pin-label, .pin.pin-on .pin-label { display: block; }
+
+/* Quick actions in the place sheet: Directions, Website, Share. */
+.act { flex: 1; height: 58px; border-radius: 12px; border: 1px solid var(--line); background: var(--card); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; font: 500 11.5px var(--sans); color: var(--ink); text-decoration: none; cursor: pointer; }
+
+/* A two- or three-way switch (Cards / List, Compact / Day / Trip). */
+.seg { display: flex; background: var(--soft); border-radius: 11px; padding: 3px; gap: 2px; }
+.seg button { height: 32px; padding: 0 12px; border: 0; border-radius: 9px; background: transparent; font: 600 12.5px var(--sans); color: #4F473E; cursor: pointer; }
+.seg button.on { background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(30,26,22,.08); }

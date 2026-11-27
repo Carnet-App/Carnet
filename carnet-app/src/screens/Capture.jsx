@@ -1,6 +1,7 @@
 import { useMemo, useRef, useState } from 'react';
 import { Sheet, Icon, CatTag } from '../ui';
 import { upsert, uid } from '../lib/store';
+import { placeFacts, priceFrom } from '../lib/facts';
 import { readImage, readVideo, placeCard, looksLikeTicket, parseTicket, notTheAccount, venueCandidates, areaHint, thumbBlob, postLayout, readOverlay, overlayCandidates, captionFacts, placeHint, firstLine, isStrong, tieredCandidates, typeHint } from '../lib/capture';
 import { getMe } from '../lib/me';
 import { storeFile } from '../lib/files';
@@ -44,7 +45,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
         // One place's own page (a map app's card, a guide's entry): its name is the whole answer.
         const sheet = !isVideo ? placeCard(r.text) : null;
         if (sheet) {
-          pages.push({ ...r, thumb, photo: thumb, sheet, first: [{ name: sheet.name, weight: 20, why: sheet.why }], pic: [], overlay: '', overlayLines: [], isVideo, ms: performance.now() - t0, file: file.name, source: sheet.source });
+          pages.push({ ...r, thumb, photo: thumb, sheet, first: [{ name: sheet.name, weight: 20, why: sheet.why, facts: placeFacts(r.text) }], pic: [], overlay: '', overlayLines: [], isVideo, ms: performance.now() - t0, file: file.name, source: sheet.source });
           continue;
         }
         // A post screenshot: caption first, words on the photo second, and the photo itself
@@ -400,6 +401,8 @@ function VenueReview({ t, r, setR, onDone }) {
       const name = m?.name || v.cand.name;
       const photo = await photoFor(v.photo || r.thumb);
       const note = v.cand.note ? v.cand.note.slice(0, 600) : null;
+      // Cuisine and price, from a place card's lines or a "PRICES €16 to €35" in the note.
+      const facts = { ...(priceFrom(note || '') || {}), ...(v.cand.facts || {}), ...(m?.google_id ? { google_id: m.google_id } : {}) };
       const ex = existingFor(v, city, places);
       let id;
       if (ex && ex.owner && getMe().id && ex.owner !== getMe().id) {
@@ -416,6 +419,7 @@ function VenueReview({ t, r, setR, onDone }) {
           address: ex.address || m?.address || v.cand.address || null,
           lat: ex.lat ?? m?.lat ?? null, lng: ex.lng ?? m?.lng ?? null,
           needs_check: ex.needs_check && !m,
+          ...Object.fromEntries(Object.entries(facts).filter(([k]) => ex[k] == null)),
         });
       } else {
         id = uid();
@@ -425,6 +429,7 @@ function VenueReview({ t, r, setR, onDone }) {
           source: r.source, source_detail: r.handle ? '@' + r.handle : null, link: r.link || null,
           photo_path: photo, photo_url: m?.google_id ? `/api/gphoto?id=${encodeURIComponent(m.google_id)}` : null,
           notes: note, collection: collection || null, needs_check: !m || !!m.addressOnly,
+          ...facts,
         });
       }
       // Already on the trip under the same name (typed in, or from someone else's import)? Not twice.
