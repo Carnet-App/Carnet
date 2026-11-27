@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Icon } from '../ui';
 import { cat, dayLabel, hm, fromMin, dur, tripNow, stayFor, areaOf, ticketsOf } from '../lib/util';
 import { buildDay } from '../lib/schedule';
@@ -19,9 +19,15 @@ function openMeals(dayItems, isPast) {
 }
 
 // The whole trip, one line per plan: what's next, at a glance. Days that are done fold away.
-export function PlanCompact({ t, me, days, onDay }) {
+export function PlanCompact({ t, me, days, onDay, jump }) {
   const now = tripNow();
   const [showPast, setShowPast] = useState(false);
+  // A day picked above: open the past days if it's one of them, and scroll to it.
+  useEffect(() => {
+    if (!jump) return;
+    if (jump.d < now.day) setShowPast(true);
+    requestAnimationFrame(() => document.getElementById('compact-' + jump.d)?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+  }, [jump?.n]);
   const [open, setOpen] = useState(null);
   const past = days.filter((d) => d < now.day);
   const pastCount = t.items.filter((i) => past.includes(i.day)).length;
@@ -41,7 +47,7 @@ export function PlanCompact({ t, me, days, onDay }) {
         const meals = openMeals(dayItems, d < now.day);
         let nowShown = !isToday;
         return (
-          <div key={d} className="col" style={{ gap: 0 }}>
+          <div key={d} id={'compact-' + d} className="col" style={{ gap: 0, scrollMarginTop: 12 }}>
             <div className="between" style={{ padding: '4px 0 6px' }}>
               <button className="k" style={{ background: 'none', border: 0, padding: 0, cursor: 'pointer', color: isToday ? 'var(--ink)' : 'var(--mute)' }} onClick={() => onDay(d)}>{isToday ? 'Today · ' : ''}{dayLabel(d, { weekday: 'short', day: 'numeric' })} ›</button>
               <span className="s">{count ? `${count} plan${count === 1 ? '' : 's'}` : 'nothing yet'}{meals ? ` · ${meals}` : ''}</span>
