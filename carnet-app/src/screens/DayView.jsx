@@ -270,9 +270,33 @@ function FreeSlot({ t, day, r, onClose, onAdd }) {
                 </button>
               ))}
             </div>
-          ) : <div className="s">Nothing {kind === 'any' ? '' : `for ${kind === 'eat' ? 'food' : kind === 'drink' ? 'a drink' : 'coffee'} `}from your list within 20 minutes.</div>}
+          ) : (() => {
+            // Nothing within 20 minutes: the nearest few further away, rather than nothing.
+            const further = fromYourList(t.places, t.items, a, { kind: kind === 'any' ? null : kind, max: 3, maxWalk: 60, foodOnly: kind !== 'any' })
+              .filter((p) => (kind === 'any' || p.category === kind) && !shown.has(p.id));
+            further.forEach((p) => shown.add(p.id));
+            return further.length ? (
+              <>
+                <div className="s">Nothing {kind === 'any' ? '' : `for ${kind === 'eat' ? 'food' : kind === 'drink' ? 'a drink' : 'coffee'} `}within 20 minutes. The nearest:</div>
+                <div className="card" style={{ padding: 0 }}>
+                  {further.map((p, i) => (
+                    <button key={p.id} className="row" onClick={() => onAdd(p, at(p, a))} style={{ width: '100%', gap: 10, padding: '10px 12px', background: 'none', border: 0, borderTop: i ? '1px solid var(--line)' : 0, textAlign: 'left', cursor: 'pointer', color: 'inherit' }}>
+                      <span style={{ width: 4, alignSelf: 'stretch', borderRadius: 2, background: cat(p.category).color }} />
+                      <span className="grow" style={{ minWidth: 0 }}><span className="n" style={{ fontSize: 16, display: 'block' }}>{p.name}</span><span className="s">{p.walk} min walk</span></span>
+                      <span className="s" style={{ fontWeight: 600 }}>Add {at(p, a)}</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : <div className="s">Nothing {kind === 'any' ? '' : `for ${kind === 'eat' ? 'food' : kind === 'drink' ? 'a drink' : 'coffee'} `}from your list within an hour’s walk.</div>;
+          })()}
         </div>
       ))}
+      {(() => {
+        // Places that can't be placed yet: no pin, so no distance.
+        const unpinned = t.places.filter((p) => p.lat == null && (kind === 'any' || p.category === kind)).length;
+        return unpinned > 0 && <div className="s" style={{ color: '#8A5A14' }}>{unpinned} {kind === 'any' ? 'place' : kind === 'eat' ? 'place to eat' : kind === 'drink' ? 'place to drink' : 'coffee place'}{unpinned === 1 ? '' : 's'} on your list {unpinned === 1 ? 'has' : 'have'} no pin yet, so {unpinned === 1 ? 'it isn’t' : 'they aren’t'} counted here. Finish {unpinned === 1 ? 'it' : 'them'} in Places (Unfinished).</div>;
+      })()}
       {near && kind !== 'any' && (!more ? (
         <button className="btn ghost block" onClick={() => setMore(true)}>More nearby, not in your guide</button>
       ) : (

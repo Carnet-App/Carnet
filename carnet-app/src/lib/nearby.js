@@ -93,9 +93,10 @@ export const catOf = (s) => (s.amenity === 'cafe' ? 'coffee' : s.amenity === 're
 // Not ones already on the plan (as the pick or a backup). Eat/drink/coffee first, the kind that
 // fits the time highest, then nearest. Each comes with its walk in minutes.
 const FOOD = new Set(['eat', 'drink', 'coffee']);
+// Places on a day (or a day's backups) are left out; ideas with no day yet are fair game.
 export function fromYourList(places, items, at, { kind = null, max = 3, maxWalk = 15, foodOnly = true } = {}) {
   if (!at || at.lat == null) return [];
-  const used = new Set((items || []).flatMap((i) => [i.place_id, ...(Array.isArray(i.alternatives) ? i.alternatives.map((a) => a.place_id) : [])]).filter(Boolean));
+  const used = new Set((items || []).flatMap((i) => [i.day ? i.place_id : null, ...(Array.isArray(i.alternatives) ? i.alternatives.map((a) => a.place_id) : [])]).filter(Boolean));
   return (places || [])
     .filter((p) => p.lat != null && !used.has(p.id) && (!foodOnly || FOOD.has(p.category)))
     .map((p) => ({ ...p, walk: walkMin(at, p) }))

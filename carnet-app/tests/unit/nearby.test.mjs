@@ -30,7 +30,9 @@ test('from your list: near the sight, the kind that suits the time first, not wh
     { id: 'e', name: 'Planned', category: 'eat', lat: 48.8600, lng: 2.3626 },
     { id: 'f', name: 'A museum', category: 'culture', lat: 48.8600, lng: 2.3626 },
   ];
-  const items = [{ place_id: 'e' }];
+  const items = [{ place_id: 'e', day: '2026-11-27' }];
   assert.deepEqual(fromYourList(places, items, museum, { kind: 'eat' }).map((p) => p.name), ['Breizh Café', 'Café Charlot']);
+  // An idea on the trip with no day yet is exactly what to suggest.
+  assert.ok(fromYourList(places, [{ place_id: 'e' }], museum, { kind: 'eat', max: 5 }).some((p) => p.name === 'Planned'));
   assert.deepEqual(fromYourList(places, items, museum, { kind: 'drink' }).map((p) => p.name)[0], 'Café Charlot');
 });

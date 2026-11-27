@@ -55,8 +55,9 @@ export function buildDay({ items, day, home, now, places, minGap = 45, hop }) {
 }
 
 function gapRow(from, to, near, places, items, open = false) {
-  // Places already on the plan — as the pick or as a backup — aren't suggested again.
-  const used = new Set(items.flatMap((i) => [i.place_id, ...(Array.isArray(i.alternatives) ? i.alternatives.map((a) => a.place_id) : [])]).filter(Boolean));
+  // Places already on a day — as the pick or as a backup — aren't suggested again. Ideas with no
+  // day yet are exactly what free time should suggest.
+  const used = new Set(items.flatMap((i) => [i.day ? i.place_id : null, ...(Array.isArray(i.alternatives) ? i.alternatives.map((a) => a.place_id) : [])]).filter(Boolean));
   const ideas = (places || [])
     .filter((p) => !used.has(p.id) && p.lat != null)
     .map((p) => ({ p, d: distM(near, p) }))
