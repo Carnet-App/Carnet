@@ -11,18 +11,21 @@ import Capture from './Capture';
 import AddToPlan from './AddToPlan';
 import { backupIndex } from '../lib/alts';
 import { fromYourList } from '../lib/nearby';
+import { lastReport, onReport } from '../lib/googleFill';
 const PinPicker = lazy(() => import('./PinPicker'));
 const MapView = lazy(() => import('./MapView'));
 
 export function PlacePhoto({ p, size = 54, style }) {
   const [src, setSrc] = useState(p.photo_url || null);
+  const [bad, setBad] = useState(false);
+  useEffect(() => { setBad(false); }, [src]);
   useEffect(() => {
     let alive = true;
     if (p.photo_path) fileUrl(p.photo_path).then((u) => alive && setSrc(u || p.photo_url || null));
     else setSrc(p.photo_url || null);
     return () => { alive = false; };
   }, [p.photo_path, p.photo_url]);
-  return src ? <img className="thumb" src={src} alt="" style={{ width: size, height: size, ...style }} loading="lazy" /> : <span className="thumb" style={{ width: size, height: size, background: cat(p.category).bg, ...style }} />;
+  return src && !bad ? <img className="thumb" src={src} alt="" style={{ width: size, height: size, ...style }} loading="lazy" onError={() => setBad(true)} /> : <span className="thumb" style={{ width: size, height: size, background: cat(p.category).bg, ...style }} />;
 }
 
 const SRC = { instagram: ['IG', '#F6E6EC', '#6B2944'], screenshot: ['Screenshot', '#F6E6EC', '#6B2944'], friend: ['Friend', '#E1F0E8', '#24563F'], osm: ['Map', '#ECEAFA', '#4A3F9C'], google: ['Google', '#ECEAFA', '#4A3F9C'], manual: ['Added', '#EDE9E2', '#4F473E'] };
@@ -30,6 +33,26 @@ const SRC = { instagram: ['IG', '#F6E6EC', '#6B2944'], screenshot: ['Screenshot'
 // A place is unfinished until it has a pin on the map, an address and nobody's unsure which it is.
 export const unfinished = (p) => !!p.needs_check || p.lat == null || !p.address;
 const missing = (p) => (p.lat == null ? 'no pin yet' : p.needs_check ? 'check which place' : !p.address ? 'no address' : '');
+
+// What the Google tidy-up did on this phone (see lib/googleFill), shown until dismissed.
+function GoogleNote() {
+  const [r, setR] = useState(lastReport);
+  const [gone, setGone] = useState(false);
+  useEffect(() => onReport((x) => { setR(x); setGone(false); }), []);
+  if (!r || gone || (!r.running && !r.tried && !r.stopped)) return null;
+  const done = [r.pinned && `pinned ${r.pinned}`, r.photos && `added ${r.photos} photo${r.photos === 1 ? '' : 's'}`].filter(Boolean).join(' and ');
+  const text = r.running
+    ? `Checking your places with Google… ${r.tried} of ${r.of}`
+    : r.stopped === 'off' ? 'Google isn’t switched on yet, so places stay as they are.'
+    : `Google checked ${r.tried} of your places: ${done || 'no sure matches'}.` +
+      (r.stopped === 'limit' ? ' Today’s Google allowance is used up; the rest carry on tomorrow.' : r.stopped === 'day' ? ' The rest carry on tomorrow.' : r.stopped === 'error' ? ' It stopped early; it’ll try again next time.' : '');
+  return (
+    <div className="row" style={{ background: '#ECEAFA', color: '#4A3F9C', borderRadius: 12, padding: '9px 12px', gap: 8, font: '400 13.5px var(--sans)' }}>
+      <Icon n="search" size={16} color="#4A3F9C" /><span className="grow">{text}</span>
+      {!r.running && <button aria-label="Dismiss" onClick={() => setGone(true)} style={{ background: 'none', border: 0, cursor: 'pointer', display: 'flex' }}><Icon n="close" size={14} color="#4A3F9C" /></button>}
+    </div>
+  );
+}
 
 // A filter as a small pill holding a native dropdown (the phone's own picker), dark when set.
 function Drop({ value, options, onChange, label }) {
@@ -136,6 +159,7 @@ export default function Places({ t, me, city, onBack, open }) {
         <Drop label="Status" value={status} onChange={setStatus} options={[['all', 'Any status'], ['new', 'Not been yet'], ['visited', 'Been'], ['liked', 'Liked'], ...(t ? [['planned', 'On a day'], ['unplanned', 'Not on a day']] : []), ['ig', 'From Instagram'], ['unfinished', 'Unfinished']]} />
       </div>
 
+      <GoogleNote />
       {todo > 0 && status !== 'unfinished' && (
         <button className="row" onClick={() => setStatus('unfinished')} style={{ background: '#F6EAD3', color: '#6B4510', border: 0, borderRadius: 12, padding: '9px 12px', gap: 8, textAlign: 'left', cursor: 'pointer', font: '400 13.5px var(--sans)' }}>
           <Icon n="alert" size={16} color="#6B4510" /><span className="grow">{todo} unfinished — no pin, no address or not sure which place</span><b style={{ fontWeight: 600 }}>Show</b>

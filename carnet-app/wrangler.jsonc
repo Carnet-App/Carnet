@@ -15,5 +15,7 @@
     "SUPABASE_URL": "https://mefdtuuvfzpegknhubpn.supabase.co",
     "SUPABASE_KEY": "sb_publishable_Dqs26OK9TGbDdVEAMmkDgg_0bRFSHph"
   },
+  "durable_objects": { "bindings": [{ "name": "LIMITS", "class_name": "Limits" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Limits"] }],
   "observability": { "enabled": true }
 }

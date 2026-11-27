@@ -1,6 +1,8 @@
 import { useEffect, useState, lazy, Suspense } from 'react';
 import { supabase } from './lib/supabase';
-import { loadLocal, startSync, useStore, retryNow } from './lib/store';
+import { loadLocal, startSync, useStore, retryNow, getState, patch } from './lib/store';
+import { googleFill } from './lib/googleFill';
+import { stayFor, todayISO } from './lib/util';
 import { TabBar, Icon } from './ui';
 import Login from './screens/Login';
 import Home from './screens/Home';
@@ -62,6 +64,21 @@ function TripShell({ route, go, me, myId, setRoute }) {
   const t = useTrip(route.tripId, me, myId);
   // Changes refused as proposals while the app wrongly thought you needed approval: apply them now.
   useEffect(() => { recoverOwnProposals(t); }, [t.canEdit, t.trip?.id]);
+  // Once the trip has synced, let Google finish your unfinished places and add missing photos.
+  const placeCount = t.places?.length || 0;
+  useEffect(() => {
+    if (!t.trip || t.trip.kind === 'tab' || !myId || !placeCount || !navigator.onLine) return;
+    const timer = setTimeout(() => {
+      const city = t.trip.city;
+      const places = Object.values(getState().places).filter((p) => p.city?.toLowerCase() === city?.toLowerCase());
+      const pins = places.filter((p) => p.lat != null && !p.needs_check);
+      const mid = (xs) => { const a = [...xs].sort((x, y) => x - y); return a[Math.floor(a.length / 2)]; };
+      const stay = stayFor(t.stays || [], todayISO());
+      const centre = pins.length >= 3 ? { lat: mid(pins.map((p) => p.lat)), lng: mid(pins.map((p) => p.lng)) } : stay ? { lat: stay.lat, lng: stay.lng } : pins[0] || null;
+      googleFill(places, { myId, city, centre, save: (id, f) => patch('places', id, f) }).catch(() => {});
+    }, 5000);
+    return () => clearTimeout(timer);
+  }, [t.trip?.id, myId, placeCount]);
   if (!t.trip) return (
     <div className="page"><div className="empty">This trip isn’t on this phone yet.<br /><button className="btn" style={{ marginTop: 14 }} onClick={() => go({ view: 'home' })}>Back to trips</button></div></div>
   );

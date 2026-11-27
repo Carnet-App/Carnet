@@ -60,6 +60,12 @@ export default defineConfig({
             options: { cacheName: 'lookups', expiration: { maxEntries: 500 } },
           },
           {
+            // Google's place photos: kept on the phone once fetched, so they don't cost again.
+            urlPattern: ({ url }) => url.pathname === '/api/gphoto',
+            handler: 'CacheFirst',
+            options: { cacheName: 'google-photos', expiration: { maxEntries: 300, maxAgeSeconds: 60 * 60 * 24 * 30 }, cacheableResponse: { statuses: [200] } },
+          },
+          {
             urlPattern: ({ request, url }) => request.destination === 'image' && !url.pathname.startsWith('/api/gphoto'),
             handler: 'CacheFirst',
             options: { cacheName: 'photos', expiration: { maxEntries: 400, maxAgeSeconds: 60 * 60 * 24 * 60 } },

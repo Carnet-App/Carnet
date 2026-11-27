@@ -147,8 +147,61 @@ async function nearby(url) {
   return json({ places }, 200, { 'cache-control': 'public, max-age=86400' });
 }
 
+// ── Google: a safety net on spending ──────────────────────────────────
+// Google's free allowance is monthly (resets on the 1st, Pacific time). These caps keep Carnet
+// just under it, across everyone's phones, until (and as well as) caps are set in Google Cloud.
+// One "photo" is one picture fetched from Google (a details call plus the image); a picture
+// already cached at Cloudflare costs nothing and isn't counted.
+export const GOOGLE_CAPS = { search: { day: 160, month: 4800 }, photo: { day: 32, month: 950 } };
+const pacific = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Los_Angeles' });
+
+// The counter lives in one small Durable Object so every phone and server shares it.
+export class Limits {
+  constructor(state) { this.state = state; }
+  async fetch(req) {
+    const u = new URL(req.url);
+    const day = u.searchParams.get('day') || pacific();
+    const month = day.slice(0, 7);
+    const s = this.state.storage;
+    if (u.pathname === '/usage') {
+      const out = {};
+      for (const k of Object.keys(GOOGLE_CAPS)) out[k] = { today: (await s.get(`${k}:${day}`)) || 0, month: (await s.get(`${k}:${month}`)) || 0, caps: GOOGLE_CAPS[k] };
+      return Response.json(out);
+    }
+    const kind = u.searchParams.get('kind');
+    const cap = GOOGLE_CAPS[kind];
+    if (!cap) return Response.json({ ok: false }, { status: 400 });
+    const d = (await s.get(`${kind}:${day}`)) || 0;
+    const m = (await s.get(`${kind}:${month}`)) || 0;
+    if (d >= cap.day || m >= cap.month) return Response.json({ ok: false, today: d, month: m });
+    await s.put({ [`${kind}:${day}`]: d + 1, [`${kind}:${month}`]: m + 1 });
+    return Response.json({ ok: true, today: d + 1, month: m + 1 });
+  }
+}
+
+// Without the counter (an older deploy), fall back to a count kept by this server copy alone.
+const local = new Map();
+export async function takeGoogle(env, kind) {
+  if (env.LIMITS) {
+    try {
+      const stub = env.LIMITS.get(env.LIMITS.idFromName('google'));
+      return (await (await stub.fetch(`https://limits/take?kind=${kind}`, { method: 'POST' })).json()).ok;
+    } catch { /* counter unreachable: use the local count below */ }
+  }
+  const day = pacific(), k = `${kind}:${day}`;
+  const n = local.get(k) || 0;
+  if (n >= GOOGLE_CAPS[kind].day) return false;
+  local.set(k, n + 1);
+  return true;
+}
+async function googleUsage(env) {
+  if (!env.LIMITS) return null;
+  try { return await (await env.LIMITS.get(env.LIMITS.idFromName('google')).fetch('https://limits/usage')).json(); } catch { return null; }
+}
+
 async function google(url, env) {
   if (!env.GOOGLE_KEY) return json({ results: [], error: 'no google key' }, 404);
+  if (!(await takeGoogle(env, 'search'))) return json({ results: [], error: 'limit' }, 429);
   const q = url.searchParams.get('q') || '';
   const lat = +url.searchParams.get('lat');
   const lng = +url.searchParams.get('lng');
@@ -176,17 +229,27 @@ async function google(url, env) {
   return json({ results });
 }
 
-async function googlePhoto(url, env) {
-  // Fetched each time (Google's terms don't allow storing copies).
+async function googlePhoto(url, env, ctx) {
   if (!env.GOOGLE_KEY) return new Response('no key', { status: 404 });
   const id = url.searchParams.get('id');
+  if (!id) return new Response('no id', { status: 400 });
+  // Each picture is fetched from Google once and then served from Cloudflare's cache for a
+  // while, so looking at the list again doesn't cost another call.
+  const edge = typeof caches !== 'undefined' ? caches.default : null;
+  const key = new Request(`https://${url.host}/api/gphoto?id=${encodeURIComponent(id)}`);
+  const hit = edge && (await edge.match(key));
+  if (hit) return hit;
+  if (!(await takeGoogle(env, 'photo'))) return new Response('limit', { status: 429, headers: { 'cache-control': 'no-store' } });
   const d = await fetch(`https://places.googleapis.com/v1/places/${encodeURIComponent(id)}`, {
     headers: { 'X-Goog-Api-Key': env.GOOGLE_KEY, 'X-Goog-FieldMask': 'photos' },
   }).then((r) => r.json());
   const name = d.photos?.[0]?.name;
-  if (!name) return new Response('none', { status: 404 });
+  if (!name) return new Response('none', { status: 404, headers: { 'cache-control': 'max-age=86400' } });
   const img = await fetch(`https://places.googleapis.com/v1/${name}/media?maxWidthPx=640&key=${env.GOOGLE_KEY}`);
-  return new Response(img.body, { headers: { 'content-type': img.headers.get('content-type') || 'image/jpeg' } });
+  if (!img.ok) return new Response('none', { status: 404, headers: { 'cache-control': 'no-store' } });
+  const res = new Response(img.body, { headers: { 'content-type': img.headers.get('content-type') || 'image/jpeg', 'cache-control': 'public, max-age=604800' } });
+  if (edge) { const put = edge.put(key, res.clone()); ctx?.waitUntil ? ctx.waitUntil(put) : await put; }
+  return res;
 }
 
 async function ogImage(url) {
@@ -350,7 +413,7 @@ async function notify(req, env) {
 }
 
 export default {
-  async fetch(req, env) {
+  async fetch(req, env, ctx) {
     const url = new URL(req.url);
     if (!url.pathname.startsWith('/api/')) return env.ASSETS.fetch(req);
     try {
@@ -371,7 +434,7 @@ export default {
           if (!(await signedIn(req, env))) return json({ error: 'sign in' }, 401);
           return google(url, env);
         case '/api/gphoto':
-          return googlePhoto(url, env);
+          return googlePhoto(url, env, ctx);
         case '/api/transit':
           if (!(await signedIn(req, env))) return json({ error: 'sign in' }, 401);
           return transit(url, env);
@@ -382,7 +445,7 @@ export default {
           if (req.method !== 'POST') return json({ error: 'POST only' }, 405);
           return notify(req, env);
         case '/api/health':
-          return json({ ok: true, transit: !!env.PRIM_TOKEN, google: !!env.GOOGLE_KEY, email: !!env.RESEND_KEY, push: !!env.VAPID_PRIVATE });
+          return json({ ok: true, transit: !!env.PRIM_TOKEN, google: !!env.GOOGLE_KEY, google_limits: !!env.LIMITS, google_usage: await googleUsage(env), email: !!env.RESEND_KEY, push: !!env.VAPID_PRIVATE });
         default:
           return json({ error: 'not found' }, 404);
       }
