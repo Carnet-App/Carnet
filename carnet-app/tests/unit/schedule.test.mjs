@@ -34,3 +34,13 @@ test('trip time: until 05:00 it is still the night before', () => {
   const fri = buildDay({ items: [show], day: '2026-11-27', now: tripNow(new Date(2026, 10, 28, 0, 30)), places: [] });
   assert.ok(!fri.rows.some((r) => r.kind === 'gap'), 'at 00:30 nothing on Friday is still "free"');
 });
+
+test('last night’s show over by 05:00 isn’t repeated the next day; a club till 07:00 is, and pushes the morning', async () => {
+  const { buildDay } = await import('../../src/lib/schedule.js');
+  const show = [{ id: 'ch', day: '2026-11-27', start_time: '21:30', end_time: '01:00', title: 'Crazy Horse' }];
+  assert.ok(!buildDay({ items: show, day: '2026-11-28', home: null, now: null, places: [] }).rows.some((r) => r.fromYesterday));
+  const club = [{ id: 'rx', day: '2026-11-27', start_time: '23:30', end_time: '07:00', title: 'Rex Club' }];
+  const { rows } = buildDay({ items: club, day: '2026-11-28', home: null, now: null, places: [] });
+  assert.ok(rows[0].fromYesterday);
+  assert.ok(rows.filter((r) => r.kind === 'gap').every((g) => g.from >= 7 * 60));
+});

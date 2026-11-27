@@ -1,4 +1,4 @@
-import { toMin, walkMin, distM } from './util.js';
+import { toMin, walkMin, distM, NIGHT_ENDS } from './util.js';
 
 const DAY = 24 * 60;
 const prevDay = (iso) => { const d = new Date(iso + 'T12:00:00'); d.setDate(d.getDate() - 1); return d.toLocaleDateString('en-CA'); };
@@ -24,10 +24,10 @@ export function buildDay({ items, day, home, now, places, minGap = 45, hop }) {
   let prevLoc = home;
   let prevName = home?.name ? home.name : 'where you’re staying';
   let prevItem = null;
-  // Last night's plans that run past midnight into this morning come first, and the morning's
-  // free time starts after them.
+  // Last night's plans that run on into this morning come first, and the morning's free time starts
+  // after them. Ones over by 05:00 belong to last night (see tripNow) and aren't repeated here.
   const yday = prevDay(day);
-  for (const it of items.filter((i) => i.day === yday && i.start_time).map((i) => ({ i, s: span(i) })).filter(({ s }) => s.end > DAY)
+  for (const it of items.filter((i) => i.day === yday && i.start_time).map((i) => ({ i, s: span(i) })).filter(({ s }) => s.end > DAY + NIGHT_ENDS)
     .sort((a, b) => a.s.start - b.s.start)) {
     rows.push({ kind: 'item', item: it.i, start: it.s.start - DAY, end: it.s.end - DAY, fromYesterday: true });
     cursor = Math.max(cursor, it.s.end - DAY);

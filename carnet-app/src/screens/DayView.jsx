@@ -94,7 +94,14 @@ export default function DayView({ t, me, day, pos }) {
         const c = cat(it.category);
         const st = busyOther ? { background: '#EDE9E2', borderColor: '#DCD5CA' } : it.visibility !== 'shared' ? { background: '#EDE9E2', borderColor: '#DCD5CA' } : { background: c.bg, borderColor: c.bg };
         return (
-          <div key={(r.fromYesterday ? 'y' : '') + it.id} className="col" style={{ gap: 4 }}>
+          r.fromYesterday ? (
+            // Still going from last night: one line, not a second card.
+            <button key={'y' + it.id} className="row s" onClick={() => !busyOther && setOpen(it)} style={{ gap: 6, padding: '2px 0 6px 58px', background: 'none', border: 0, textAlign: 'left', cursor: 'pointer' }}>
+              <span style={{ width: 8, height: 8, borderRadius: 4, background: c.color, flex: 'none' }} />
+              <span>Still going from {dayLabel(it.day, { weekday: 'short' })}: <b style={{ fontWeight: 600, color: 'var(--ink)' }}>{busyOther ? 'something on' : it.title}</b>{it.end_time ? `, until ${hm(it.end_time)}` : ''}</span>
+            </button>
+          ) :
+          <div key={it.id} className="col" style={{ gap: 4 }}>
             <div className="tl">
             <div className="tm">{r.fromYesterday ? '00:00' : hm(it.start_time)}</div>
             <button className="it" style={st} onClick={() => !busyOther && setOpen(it)} disabled={busyOther}>
