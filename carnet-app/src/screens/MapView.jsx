@@ -161,8 +161,9 @@ export default function MapView({ t, places, onClose, focus }) {
   return (
     <div className="sheet-back" style={{ alignItems: 'stretch' }}>
       <div style={{ position: 'relative', width: '100%', maxWidth: 560, margin: '0 auto', background: '#EFE8DC' }}>
-        <div ref={box} style={{ position: 'absolute', inset: 0 }} />
-        <div style={{ position: 'absolute', left: 14, right: 14, top: 'calc(env(safe-area-inset-top) + 12px)', display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {/* The map is its own layer: its pins and labels can't come up over the cards on top of it. */}
+        <div ref={box} style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }} />
+        <div style={{ position: 'absolute', left: 14, right: 14, top: 'calc(env(safe-area-inset-top) + 12px)', display: 'flex', flexDirection: 'column', gap: 8, zIndex: 2 }}>
           <div className="card between" style={{ boxShadow: '0 4px 14px rgba(30,26,22,.08)' }}>
             <div><div className="k amber">{t?.trip.city || places[0]?.city} · {pins.length} places</div><div className="n" style={{ fontSize: 20 }}>Map</div></div>
             <button className="icon" aria-label="Close map" onClick={onClose}><Icon n="close" size={18} /></button>
@@ -175,7 +176,7 @@ export default function MapView({ t, places, onClose, focus }) {
           </div>
         </div>
         {selP ? (
-          <div style={{ position: 'absolute', left: 14, right: 14, bottom: 'calc(env(safe-area-inset-bottom) + 16px)' }}>
+          <div style={{ position: 'absolute', left: 14, right: 14, bottom: 'calc(env(safe-area-inset-bottom) + 16px)', zIndex: 2 }}>
             <div className="card" style={{ padding: 0, overflow: 'hidden', boxShadow: '0 6px 20px rgba(30,26,22,.18)' }}>
               <div style={{ display: 'flex', gap: 12, padding: 12, alignItems: 'center' }}>
                 <PlacePhoto p={selP} size={72} />
@@ -195,7 +196,7 @@ export default function MapView({ t, places, onClose, focus }) {
             </div>
           </div>
         ) : (
-        <div className="hscroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 16px)', padding: '0 14px' }}>
+        <div className="hscroll" style={{ position: 'absolute', left: 0, right: 0, bottom: 'calc(env(safe-area-inset-bottom) + 16px)', padding: '0 14px', zIndex: 2 }}>
           {near.slice(0, 25).map((p) => (
             <button key={p.id} ref={(el) => { cardRefs.current[p.id] = el; }} onClick={() => setSel(p.id)}
               style={{ width: 230, background: 'var(--card)', border: '1px solid ' + (sel === p.id ? 'var(--ink)' : 'var(--line)'), borderRadius: 16, overflow: 'hidden', padding: 0, textAlign: 'left', cursor: 'pointer' }}>

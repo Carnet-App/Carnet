@@ -47,7 +47,7 @@ export default function PinPicker({ p, start, onPick, onClose }) {
     <Sheet title={p.lat != null ? 'Move the pin' : 'Pin it on the map'} onClose={onClose}>
       <div className="s">Move the map until the pin sits on {p.name}. Pinch to zoom in close.</div>
       <div style={{ position: 'relative', height: '52vh', borderRadius: 16, overflow: 'hidden', border: '1px solid var(--line)' }}>
-        <div ref={box} style={{ position: 'absolute', inset: 0 }} />
+        <div ref={box} style={{ position: 'absolute', inset: 0, zIndex: 0, isolation: 'isolate' }} />
         {/* The pin stays in the middle; the map moves under it. Its tip marks the spot. */}
         <div aria-hidden="true" style={{ position: 'absolute', left: '50%', top: '50%', transform: 'translate(-50%, -100%)', pointerEvents: 'none', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <span style={{ width: 30, height: 30, borderRadius: 15, background: c.color, border: '3px solid #FAF8F3', boxShadow: '0 2px 6px rgba(30,26,22,.35)' }} />
