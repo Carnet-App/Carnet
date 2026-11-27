@@ -393,27 +393,54 @@ export async function pdfPages(file, { maxPages = 4, width = 1600 } = {}) {
   return out;
 }
 // A QR code anywhere on the first pages, read sharp (tickets often put it small, or on page 2).
+// Every ticket code in a PDF: one per page (the usual e-ticket), or several on one page (a group
+// booking printed two or four to a sheet), in order. Each comes with the picture of its ticket:
+// the page, or the part of the page it was found in.
+const crop = (c, x, y, w, h) => {
+  const o = document.createElement('canvas');
+  o.width = Math.round(w); o.height = Math.round(h);
+  o.getContext('2d').drawImage(c, x, y, w, h, 0, 0, o.width, o.height);
+  return o;
+};
+export function codesOnPage(canvas, read = readQR) {
+  const W = canvas.width, H = canvas.height;
+  const found = [];
+  const add = (qr, c) => { if (qr && !found.some((f) => f.qr === qr)) found.push({ qr, canvas: c }); };
+  add(read(canvas), canvas);
+  // A reader finds one code per picture: look at each half, and each quarter if the halves differ.
+  const halves = [[0, 0, W, H / 2], [0, H / 2, W, H / 2], [0, 0, W / 2, H], [W / 2, 0, W / 2, H]].map(([x, y, w, h]) => { const c = crop(canvas, x, y, w, h); return { qr: read(c), c }; });
+  for (const h of halves) add(h.qr, h.c);
+  if (found.length >= 2) for (const [x, y] of [[0, 0], [W / 2, 0], [0, H / 2], [W / 2, H / 2]]) { const c = crop(canvas, x, y, W / 2, H / 2); add(read(c), c); }
+  // One code on the page: the whole page is its ticket.
+  if (found.length === 1) found[0].canvas = canvas;
+  return found;
+}
+export function ticketsInPages(pages, read = readQR) {
+  const out = [];
+  for (const p of pages) for (const f of codesOnPage(p.canvas, read)) if (!out.some((o) => o.qr === f.qr)) out.push(f);
+  return out;
+}
+
 export async function pdfTicket(file) {
-  const pages = await pdfPages(file, { width: 2000 });
-  let qr = null;
-  for (const p of pages) { qr = readQR(p.canvas); if (qr) break; }
-  return { qr, canvas: pages[0]?.canvas, text: pages.map((p) => p.text).join('\n') };
+  const pages = await pdfPages(file, { width: 2000, maxPages: 12 });
+  const tickets = ticketsInPages(pages);
+  return { tickets, qr: tickets[0]?.qr || null, canvas: pages[0]?.canvas, text: pages.map((p) => p.text).join('\n') };
 }
 export async function readPdf(file, onProgress) {
   onProgress?.('Opening the PDF…');
-  const pages = await pdfPages(file, { width: 1600 });
+  const pages = await pdfPages(file, { width: 1600, maxPages: 12 });
   if (!pages.length) throw new Error('that PDF has no pages');
-  let qr = null;
-  for (const p of pages) { qr = readQR(p.canvas); if (qr) break; }
-  if (!qr) for (const p of (await pdfPages(file, { width: 2400, maxPages: 2 }))) { qr = readQR(p.canvas); if (qr) break; }
+  let tickets = ticketsInPages(pages);
+  if (!tickets.length) tickets = ticketsInPages(await pdfPages(file, { width: 2400, maxPages: 2 }));
+  const qr = tickets[0]?.qr || null;
   const first = pages[0];
   if (pages.some((p) => p.text.trim().length > 20)) {
     const text = pages.map((p) => p.text).join('\n');
-    return { text, lines: first.lines, height: first.canvas.height, qr, canvas: first.canvas, pdf: true };
+    return { text, lines: first.lines, height: first.canvas.height, qr, tickets, canvas: first.canvas, pdf: true };
   }
   // A scanned PDF: read the first page like a photo.
   const { text, lines, height } = await readText(first.canvas, onProgress);
-  return { text, lines, height, qr, canvas: first.canvas, pdf: true };
+  return { text, lines, height, qr, tickets, canvas: first.canvas, pdf: true };
 }
 
 export async function readImage(file, onProgress) {

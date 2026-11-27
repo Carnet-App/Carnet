@@ -7,7 +7,7 @@ import { getMe } from '../lib/me';
 import { storeFile } from '../lib/files';
 import { saveInspection, compactLines } from '../lib/inspect';
 import InspectPanel from './InspectPanel';
-import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS, norm, nameOf } from '../lib/util';
+import { api, findVenue, similarity, distM, guessCategory, daysBetween, dayLabel, CATS, norm, nameOf, ticketFields } from '../lib/util';
 import { nameMatch, rankResults, squashName } from '../lib/match';
 import ItemEditor from './ItemEditor';
 import { AddPlace } from './Places';
@@ -125,7 +125,7 @@ export default function Capture({ t, me, onClose, defaultCity }) {
     };
     if (pages.length === 1 && !one.notTicket && looksLikeTicket(one.text, one.qr)) {
       const tk = parseTicket(one.text);
-      setResult({ kind: 'ticket', ...tk, qr: one.qr, thumb: one.thumb, text: one.text });
+      setResult({ kind: 'ticket', ...tk, qr: one.qr, tickets: one.tickets, thumb: one.thumb, text: one.text });
       setStage('ticket');
       return;
     }
@@ -275,16 +275,25 @@ function TicketForm({ t: given, me, r, onDone, onNotTicket }) {
   const set = (k, v) => setF((x) => ({ ...x, [k]: v }));
   async function save() {
     if (!trip) return;
-    const path = r.thumb ? await storeFile(r.thumb, { tripId: t.trip.id }) : null;
+    // Every ticket in it (a PDF can hold one per person), each with its own picture.
+    let fields;
+    if (r.tickets?.length > 1) {
+      const list = [];
+      for (const k of r.tickets) list.push({ qr: k.qr, path: await storeFile(await thumbBlob(k.canvas, 1200), { tripId: t.trip.id }), by: me || null });
+      fields = ticketFields(list);
+    } else {
+      const path = r.thumb ? await storeFile(r.thumb, { tripId: t.trip.id }) : null;
+      fields = { qr_text: r.qr || null, attachment_path: path };
+    }
     upsert('items', {
       id: uid(), trip_id: t.trip.id, title: f.title, category: f.category, day: f.day || null, start_time: f.time || null,
-      status: 'booked', visibility: 'shared', booking_ref: f.ref || null, qr_text: r.qr || null, attachment_path: path,
+      status: 'booked', visibility: 'shared', booking_ref: f.ref || null, ...fields,
     });
     onDone();
   }
   return (
     <>
-      <div className="k" style={{ color: '#24563F' }}>{r.qr ? 'Ticket · QR code found' : 'Looks like a booking'}</div>
+      <div className="k" style={{ color: '#24563F' }}>{r.tickets?.length > 1 ? `${r.tickets.length} tickets · QR codes found` : r.qr ? 'Ticket · QR code found' : 'Looks like a booking'}</div>
       <h1 className="h1" style={{ fontSize: 28 }}>Add to the trip as booked</h1>
       {!given && (
         allTrips.length ? (

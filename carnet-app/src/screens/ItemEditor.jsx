@@ -163,15 +163,21 @@ function TicketField({ f, set, tripId, me, members }) {
   const ref = useRef();
   const [busy, setBusy] = useState('');
   const list = f.tickets || [];
+  // One file can hold several tickets (a PDF with one per page): each becomes its own ticket.
   async function read(file) {
     let qr = null, page;
     if (isPdf(file)) {
-      // An e-ticket PDF: the code is read from the PDF itself, sharp at any size.
+      // An e-ticket PDF: the codes are read from the PDF itself, sharp at any size.
       const t = await pdfTicket(file);
-      qr = t.qr; page = t.canvas;
-      if (!page) throw new Error('that PDF has no pages');
+      if (!t.canvas) throw new Error('that PDF has no pages');
       const price = findPrice(t.text);
       if (price) set('price_hint', price);
+      if (t.tickets.length) {
+        const out = [];
+        for (const k of t.tickets) out.push({ qr: k.qr, path: await storeFile(await thumbBlob(k.canvas, 1200), { tripId }), by: me || null });
+        return out;
+      }
+      page = t.canvas;
     } else {
       const { img } = await loadImage(file);
       // Small codes need the full resolution; try that, then a smaller copy (blur helps some).
@@ -179,7 +185,7 @@ function TicketField({ f, set, tripId, me, members }) {
       page = toCanvas(img, 1600);
     }
     const path = await storeFile(await thumbBlob(page, 1200), { tripId });
-    return { qr: qr || null, path, by: me || null };
+    return [{ qr: qr || null, path, by: me || null }];
   }
   // Several at once: one PDF per person, or a screenshot of each ticket.
   async function add(files) {
@@ -188,14 +194,18 @@ function TicketField({ f, set, tripId, me, members }) {
     for (const [i, file] of files.entries()) {
       setBusy(files.length > 1 ? `Reading ticket ${i + 1} of ${files.length}…` : 'Reading the ticket…');
       try {
-        const k = await read(file);
-        // The same ticket added twice (same code) is kept once.
-        if (k.qr && [...list, ...got].some((x) => x.qr === k.qr)) { missed.push(`${file.name}: already added`); continue; }
-        got.push(k);
+        const ks = await read(file);
+        if (ks.length > 1) setBusy(`Found ${ks.length} tickets in ${file.name}…`);
+        for (const k of ks) {
+          // The same ticket added twice (same code) is kept once.
+          if (k.qr && [...list, ...got].some((x) => x.qr === k.qr)) { missed.push(`${file.name}: a ticket already added`); continue; }
+          got.push(k);
+        }
       } catch (e) { missed.push(`${file.name}: ${e.message}`); }
     }
     if (got.length) {
       set('tickets', [...list, ...got]);
+      if (got.length > 1) setBusy(`Added ${got.length} tickets.`);
       if (f.status !== 'booked') set('status', 'booked');
     }
     const noQr = got.filter((k) => !k.qr).length;
