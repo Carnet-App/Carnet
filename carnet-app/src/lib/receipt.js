@@ -23,7 +23,7 @@ const NOT_TOTAL = /\b(total sav\w*|sav(?:ing|ed)s? today|total points|points tot
 const SUBTOTAL = /\b(sous[- ]?total|sub[- ]?total|items total|zwischensumme|balance before saving)\b/i;
 const SERVICE = /\b(service|serv\b|servizio|bedienung|pourboire|gratuity|tip\b)/i;
 // Lines that are never items: tax tables, payment, card slips, receipt furniture.
-const SKIP = /\b(tva|vat|btw|mwst|iva|pdv|porez|steuer|netto|brutto|osnovica|iznos|rekapitulacija|ht\b|cb\b|carte|card|visa|mastercard|maestro|amex|kartica|bancontact|contactless|paypass|tendered|esp[eè]ces|cash|bargeld|gotovina|rendu|change|r[uü]ckgeld|paiement|payment|pagamento|pagamenti|betaling|betaald|kreditkarte|ec-karte|merci|thank|danke|hvala|bedankt|ticket\s*n|table|tafel|tisch|stol|couverts?|covers|serveur|server|operater|vendeur|addition|date|datum|heure|time|tijd|vrijeme|siret|oib|tel|t[ée]l|phone|clubcard|nectar points|sparks|points|per guest|par client|aid|pan seq|auth|merchant|terminal|approved|it\w{1,3} value|weight|deposit|reprint|rabatt in|items\s*:|per kg|kg\b)\b/i;
+const SKIP = /\b(note provisoire|addition provisoire|pr[ée]-?addition|tva|vat|btw|mwst|iva|pdv|porez|steuer|netto|brutto|osnovica|iznos|rekapitulacija|ht\b|cb\b|carte|card|visa|mastercard|maestro|amex|kartica|bancontact|contactless|paypass|tendered|esp[eè]ces|cash|bargeld|gotovina|rendu|change|r[uü]ckgeld|paiement|payment|pagamento|pagamenti|betaling|betaald|kreditkarte|ec-karte|merci|thank|danke|hvala|bedankt|ticket\s*n|table|tafel|tisch|stol|couverts?|covers|serveur|server|operater|vendeur|addition|date|datum|heure|time|tijd|vrijeme|siret|oib|tel|t[ée]l|phone|clubcard|nectar points|sparks|points|per guest|par client|aid|pan seq|auth|merchant|terminal|approved|it\w{1,3} value|weight|deposit|reprint|rabatt in|items\s*:|per kg|kg\b)\b/i;
 const MONEY_CUR = (t) => (/£|gbp/i.test(t) ? 'GBP' : /€|\beur\b/i.test(t) ? 'EUR' : /\bchf\b/i.test(t) ? 'CHF' : /\$|usd/i.test(t) ? 'USD' : null);
 
 const num = (s) => {
@@ -46,6 +46,53 @@ function amountsIn(line) {
   return out;
 }
 
+// "1.00 Le Pompette", "2,000 Eastern Fizz": a quantity printed like an amount, before a name.
+// A name follows (not a VAT letter, "21,00 H", nor a currency, "50,00 EUR"); never on a total line.
+const NAMEISH = '(?=\\s+(?!(?:eur|gbp|chf|usd|euros?)\\b)\\p{L}{2})';
+const QTY_DEC = new RegExp(`(^|\\s)(\\d{1,2})[.,]0{2,3}${NAMEISH}`, 'giu');
+const qtyFirst = (l) => (TOTAL.test(l) || PAID.test(l) ? l : l.replace(QTY_DEC, '$1$2'));
+
+// Some tills print the prices as a column of their own that the reader doesn't line up with the
+// names: "17.00 / 15.00 / 1.00 Le Pompette 12.00 / 1.00 Vodka Aloe Vera 8.00 / 1.00 Eastern Fizz
+// 1.00 Matcha Latte". When the lines don't add up, take the item names (each starting with its
+// quantity) and the amounts above the total in reading order; if exactly as many amounts in a row
+// as there are names add up to the printed total, they belong together, in order. Nothing is
+// paired unless it adds up exactly.
+export function columnLines(text, total) {
+  if (total == null) return null;
+  const raw = text.split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
+  const end = raw.findIndex((l) => TOTAL.test(l) && !SUBTOTAL.test(l) && !NOT_TOTAL.test(l));
+  const body = raw.slice(0, end < 0 ? raw.length : end);
+  const names = [];
+  const amounts = [];
+  const decimalQty = body.filter((l) => new RegExp(`(^|\\s)\\d{1,2}[.,]0{2,3}${NAMEISH}`, 'iu').test(l)).length >= 2;
+  for (const l of body) {
+    if (SKIP.test(l) || PAID.test(l) || SERVICE.test(l)) continue;
+    // Names: each starts with its quantity ("1.00 Le Pompette"; "2 Eastern Fizz" when the till
+    // prints whole numbers). Several can share a line when the reader joins rows.
+    const qtyAt = decimalQty ? new RegExp(`(?:^|\\s)(\\d{1,2})[.,]0{2,3}\\s+(?=(?!(?:eur|gbp|chf|usd|euros?)\\b)\\p{L}{2})`, 'giu') : /^(\d{1,2})\s+(?=\p{L}{2})/gu;
+    const parts = [];
+    for (const m of l.matchAll(qtyAt)) parts.push({ at: m.index + m[0].length, q: +m[1], from: m.index });
+    for (let i = 0; i < parts.length; i++) {
+      const seg = l.slice(parts[i].at, parts[i + 1]?.from ?? l.length);
+      const nm = seg.replace(AMOUNT, ' ').replace(/[^\p{L}\d'’&\s-]/gu, ' ').replace(/\s+/g, ' ').trim();
+      if (/\p{L}{3}/u.test(nm)) names.push({ name: nm, quantity: parts[i].q });
+    }
+    // Amounts: everything else that looks like money, in order (quantities taken out first).
+    const rest = l.replace(decimalQty ? new RegExp(`(?:^|\\s)\\d{1,2}[.,]0{2,3}${NAMEISH}`, 'giu') : /^\d{1,2}(?=\s+\p{L}{2})/u, ' ');
+    for (const a of amountsIn(rest)) if (a.value > 0 && a.value < 5000) amounts.push(a.value);
+  }
+  if (names.length < 2) return null;
+  const want = c2(total);
+  for (let i = 0; i + names.length <= amounts.length; i++) {
+    const run = amounts.slice(i, i + names.length);
+    if (run.reduce((x, y) => x + c2(y), 0) === want) {
+      return names.map((n, j) => ({ name: n.name, price: run[j], ...(n.quantity && n.quantity !== 1 ? { quantity: n.quantity } : { quantity: 1 }), columns: true }));
+    }
+  }
+  return null;
+}
+
 export function parseReceipt(text) {
   const raw = text.split('\n').map((l) => l.replace(/\s+/g, ' ').trim()).filter(Boolean);
   const lines = [];
@@ -61,7 +108,7 @@ export function parseReceipt(text) {
 
   for (let k = 0; k < raw.length; k++) {
     // Reader debris after the price ("£4.40 }  -"), a £ read as "g"/"f"/"E" before a price.
-    const l = raw[k].replace(/(?<=\d[.,]\d{2})(?:\s+[^\w\s]{1,2})+\s*$/u, '').replace(/(^|\s)[gfE](?=\d{1,4}[.,]\d{2}\b)/g, '$1£');
+    const l = qtyFirst(raw[k].replace(/(?<=\d[.,]\d{2})(?:\s+[^\w\s]{1,2})+\s*$/u, '').replace(/(^|\s)[gfE](?=\d{1,4}[.,]\d{2}\b)/g, '$1£'));
     const svcPct = l.match(/(?:service|serv)[^0-9]*?(\d{1,2}(?:[.,]\d{1,2})?)\s*%|(\d{1,2}(?:[.,]\d{1,2})?)\s*%\s*(?:service|serv)/i);
     if (svcPct) servicePct = parseFloat((svcPct[1] || svcPct[2]).replace(',', '.'));
     // Percentages and volumes/weights aren't money ("12.5%", "0,75 L", "1.0 l", "4.460 kg").
@@ -218,6 +265,17 @@ export function parseReceipt(text) {
       if (fix.lines) for (const f of fix.lines) { const ln = lines[f.line]; corrections.push({ name: ln.name, from: ln.price, to: f.to, reason: fix.reason }); ln.price = f.to; ln.corrected = { from: f.from, reason: fix.reason }; }
       else if (fix.line != null) { const ln = lines[fix.line]; corrections.push({ name: ln.name, from: ln.price, to: fix.to, reason: fix.reason }); ln.price = fix.to; ln.corrected = { from: fix.from, reason: fix.reason }; }
       else { corrections.push({ name: 'Total', from: S.total, to: fix.to, reason: fix.reason }); totals.unshift(fix.to); }
+      S = summarise();
+    }
+  }
+  // Still not adding up: maybe the prices were printed as a column of their own.
+  if (S.validation !== 'reconciled' && S.total != null) {
+    const cols = columnLines(text, S.total);
+    if (cols) {
+      const kept = lines.filter((l) => l.service);
+      lines.length = 0;
+      lines.push(...cols, ...kept);
+      corrections.length = 0;
       S = summarise();
     }
   }
